@@ -1,0 +1,699 @@
+Pehle research karta hu (strategy execution, M&A/deal management, sustainability regulation, customer data, org design), phir poori guide deta hu.Research ho gayi (strategy execution/SPM, M&A aur India merger control, CSRD/BRSR, single customer view, org design, competitive intelligence). Neeche **9 screens / 37 tabs** ka full guide hai, aur end mein coverage matrix.
+
+---
+
+# RESEARCH NOTES (guide mein jo cheezein inse aayi)
+
+*Dates, thresholds aur clocks sab config tables mein rakhna. Hardcode nahi, aur legal/finance team se verify karwana.*
+
+**Strategy execution:**
+- OKR software goal setting aur tracking karta hai, jabki strategy execution software un goals ko portfolio, funding aur value realization se jodta hai. Strategy mapping, scenario/what-if analysis, financial governance aur resource/capacity management enterprise platforms ke core capabilities hain.
+- Annual strategic goal se quarterly OKR aur phir team ke key result tak cascade hi alignment gap band karta hai.
+
+**M&A aur deal governance:**
+- Data rooms ab akele nahi rahe, integrated deal platforms ban rahe hain jo document management ko project management aur post-merger integration planning se jodte hain. VDR mein granular permissions, documents se linked due-diligence checklists, aur Q&A workflow (assignment, approval, status) hona chahiye. Due diligence aam taur par 30 se 90 din leti hai.
+- **India merger control:** Asset, turnover ya ₹2,000 crore deal-value threshold cross karne wala combination CCI ko notify karna padta hai aur approval se pehle complete nahi ho sakta. Review clock 150 din ka hai aur "material influence" control test codified hai. Deal value threshold tab lagta hai jab transaction value INR 20 billion se upar ho aur target ke India mein substantial business operations hon. Deal value mein har direct/indirect, deferred ya non-cash consideration aata hai. Interconnected transactions ke liye approval ek saath leni padti hai.
+
+**Sustainability strategy:**
+- CSRD Omnibus ke baad bhi double materiality mandatory hai. Omnibus se in-scope companies ki sankhya bahut kam hui (lagbhag 80-90%). Directive (EU) 2026/470 18 March 2026 se force mein hai, aur India mein SEBI BRSR top 1,000 listed companies ke liye mandatory hai, BRSR Core assurance phase-wise badh raha hai. ISSB financial materiality par focus karta hai, CSRD double materiality par.
+
+**Customer experience / single view:**
+- Identity resolution mein deterministic aur probabilistic dono matching chalti hain, consent ek simple boolean nahi balki multi-dimensional state hai, aur ek insaan ke kai identifiers hone se data-subject rights ke workflows linked identifiers par chalne padte hain. Single Customer View sirf merged table nahi, governed data product hai, aur identity resolution ek continuous operation hai, one-time project nahi. Consent withdraw hone par change connected sab platforms tak ek hi action mein propagate hona chahiye.
+
+**Org design:**
+- Org modeling mein positions drag-drop karke headcount, FTE, cost, span aur layers ka live impact dikhta hai, scenarios side-by-side compare hote hain, aur finalize hone par approval route hota hai. Scenario ko baseline se compare karna aur reporting lines badalte hi spans/layers auto-recalculate hona zaruri hai. Position-level cost, vacancy modeling aur sensitive-access controls requirements mein aate hain. Roles eliminate/consolidate/relocate karne ke internal mobility aur retention par asar bhi model karne padte hain, sirf span-layer-cost kaafi nahi.
+
+**Competitive intelligence:**
+- CI tools competitor tracking, battlecards, win-loss analysis aur market monitoring automate karte hain. Corporate strategy (M&A, market entry, portfolio planning) aur strategic foresight/scenario planning alag use cases hain.
+
+---
+
+# COMMON FOUNDATION (sab modules pe lagu)
+
+**Common rules:** API prefix `/api/strat/...`. Har create/edit/action `audit_log` mein. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath (delete nahi, disable). Har table mein `entity_id`. Weights, thresholds, scoring models, clocks aur regulatory rules **config tables** mein.
+
+**Reuse (2.0 guide ke Common Foundation jaise, dobara define nahi):** `audit_log, approval_workflows, approval_requests, approval_actions, approval_delegations, notifications, documents, comments, custom_fields, custom_objects, reason_codes, translations, business_events, legal_entities, countries/country_config, currencies/exchange_rates, fiscal_calendars, locations, org_units, users, parties, trace_links, access_policies, integration_mappings, external_refs, gate_templates/gate_reviews (Stage-Gate Engine), change_requests (Change Engine)`.
+
+**Strategy foundation tables (NEW, sab modules inhe use karenge):**
+```
+strategy_cycles (id, entity_id, name, horizon_years, start_date, end_date, status[planning/approved/executing/closed], version)
+strategy_nodes (id, cycle_id, node_type[vision/mission/option/enterprise_strategy/objective/key_result/initiative/measure/bu_strategy/cx_strategy/business_model/function_strategy], ref_table, ref_id, parent_node_id, owner_id, weight, status)   -- poori strategy ek tree/graph
+strategy_links (id, from_node_id, to_node_id, link_type[supports/depends_on/conflicts_with/measured_by/funded_by/derived_from])
+strategy_versions (id, cycle_id, node_id, version_no, snapshot_json, reason_code_id, approved_by, approved_on, is_baseline)
+evidence_items (id, subject_node_id, evidence_type[research/data/interview/benchmark/document], source_ref, document_id, confidence, captured_on)
+assumptions (id, node_id, assumption, owner_id, validation_method, validation_due, validated, status[valid/at_risk/invalid])
+scenarios (id, cycle_id, name, drivers_json, assumptions_json, status) / scenario_results (id, scenario_id, subject_node_id, metrics_json, run_by, run_at)
+decision_log (id, node_id, decision, options_considered_json, rationale, decided_by, decided_on, approval_request_id)
+review_cycles (id, cycle_id, cadence[monthly/quarterly/annual], next_review_date, scope_json, status)
+restricted_projects (id, code_name, type[ma/restructuring/divestiture/other], member_ids_json, is_insider_listed, wall_rules_json, status)   -- need-to-know access
+```
+
+**Common rules (advanced):**
+- **Strategy-as-graph:** vision to mission to option to strategy to objective to initiative to measure, sab `strategy_nodes` + `strategy_links` se. Koi bhi objective ya initiative jo strategy se linked nahi, orphan flag hota hai.
+- **Versioning + baseline:** har approved strategy artefact versioned, "as-of date" se koi bhi report.
+- **Evidence and assumptions:** har strategic decision ke saath evidence aur assumptions. Assumption `invalid` hone par linked nodes `at_risk` flag hote hain aur owner ko review task jata hai.
+- **Shared scenario engine:** options, deals, org models, initiatives sab ek hi scenario framework par (drivers, assumptions, side-by-side compare).
+- **Need-to-know:** M&A, restructuring aur divestiture data `restricted_projects` ke through. Insider list, masked views, har access log.
+- **Multi-entity / country / currency / language:** amounts ke saath currency, group base currency mein roll-up, text `translations` se.
+- **Data sourcing:** Finance/ERP (financial health), HR (org_units, positions, skills), CRM/CDP (customer), Product Portfolio (2.0 Module 1), Analytics/BI, Compliance (regulations register 2.0 Module 3).
+- **Approval engine:** parallel steps, quorum, board-level approvals, delegation, SLA escalation.
+
+**Dependencies (naam se):** Approval Engine, Notification Engine, Document Store/Data Room, Finance/ERP/FP&A, HR Core, Product Portfolio (2.0), CRM/CDP, Compliance/Legal, Analytics/BI, PPM/Jira.
+
+---
+
+# MODULE 1: External Environment Analysis (1.1.1)
+
+### FRONTEND: Screen 1: External Environment (4 tabs)
+
+**Tab 1. Competitive Intelligence** (1.1.1.1, 1.1.1.2)
+- Competitor register: direct / indirect / emerging / potential entrants, profile (segments, geographies, offerings, pricing, financials, leadership, M&A, patents).
+- Signal feed (news, filings, pricing changes, launches, hiring, exec moves, web changes) with relevance score, triage (new/triaged/actioned/ignored).
+- Benchmarking (market share, price index, capability scores, financial ratios), five-forces scoring per market, strategic group map.
+- Battlecards, win/loss records, war-gaming (competitor move simulation).
+
+**Tab 2. Alternatives & Technology** (1.1.1.3, 1.1.1.8)
+- Substitutes/alternatives register: threat score, switching cost, price-performance curve, adoption %, new business models.
+- Technology assessment: maturity, adoption stage, impact vs time horizon, recommendation (monitor/pilot/adopt/ignore). 2.0 Module 5 ke technology radar se linked.
+
+**Tab 3. Macro Environment** (1.1.1.4 to 1.1.1.7, 1.1.1.9)
+- Factor register: economic, political/regulatory, environmental, social/cultural, demographic (PESTLE). Direction (tailwind/headwind), probability x impact, time horizon, geography.
+- Indicators with live feeds (GDP, inflation, rates, FX, commodity, policy changes). Regulatory horizon linked to compliance regulations register.
+- Climate risk (physical/transition scenarios by location/asset), demographics (population, age cohorts, income, urbanization).
+- Trend to implication to response, scenario planning (driver-based, 2x2, stress tests).
+
+**Tab 4. IP Landscape** (1.1.1.10)
+- Patent landscape (by class/year/assignee), whitespace map, own vs competitor position, expiring patents, standards-essential patents, licensing opportunities, FTO risk summary. 2.0 Module 3 ke `ip_assets` se linked.
+
+### BACKEND: Tables
+```
+competitors (id, name, type[direct/indirect/emerging/potential_entrant/substitute_provider], parent_company, hq_country_id, segments_json, geographies_json, ticker, status)
+competitor_profiles (id, competitor_id, as_of_date, revenue, growth_pct, margin_pct, market_share_pct, headcount, pricing_json, capabilities_json, strengths_json, weaknesses_json, currency)
+competitor_signals (id, competitor_id, signal_type, title, summary, source_url, detected_on, relevance_score, sentiment, status, triaged_by)
+competitor_benchmarks (id, metric, competitor_id, own_value, competitor_value, period, source)
+five_forces_assessments (id, market_id, force[rivalry/new_entrants/substitutes/buyer_power/supplier_power], score, rationale, version, assessed_on)
+battlecards (id, competitor_id, content_json, version, owner_id, last_reviewed, status)
+winloss_records (id, deal_ref, competitor_id, outcome, reasons_json, interview_doc_id, closed_on)
+war_games (id, competitor_id, scenario, moves_json, outcome_json, run_on)
+alternatives (id, name, alt_type[substitute/complement/new_model], description, affected_offerings_json, threat_score, switching_cost, price_performance_json, adoption_pct, status)
+technology_assessments (id, technology_ref_id, maturity, adoption_stage, impact_score, time_horizon, recommendation, assessed_by, assessed_on)
+env_factors (id, category[economic/political/regulatory/environmental/social/cultural/demographic/legal], name, description, geography_json, direction, probability, impact, time_horizon, owner_id, status)
+env_indicators (id, factor_id, indicator, source, unit, feed_ref) / env_indicator_values (id, indicator_id, period, value)
+climate_risk_assessments (id, location_id, hazard, scenario, horizon_year, exposure_json, financial_impact, currency)
+demographic_segments (id, country_id, region, segment, population, growth_pct, age_dist_json, income_json, as_of_year, source)
+trend_implications (id, factor_id, implication, affected_node_ids_json, response, owner_id, status)
+ip_landscape_runs (id, scope_json, run_on, summary_json, whitespace_json)
+ip_position_summary (id, technology_area, own_assets, competitor_assets_json, strength_score, risk_notes, as_of_date)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/env/competitors    GET/POST .../competitors/:id/profile    GET/POST/PUT .../signals    PUT .../signals/:id/triage
+GET/POST/PUT /api/strat/env/five-forces    GET/POST/PUT .../battlecards    GET/POST .../winloss    POST .../war-games/run
+GET/POST/PUT /api/strat/env/alternatives   GET/POST/PUT .../tech-assessments
+GET/POST/PUT /api/strat/env/factors        GET/POST .../indicators/:id/values    GET/POST/PUT .../climate-risk    GET/POST .../demographics
+POST /api/strat/env/scenarios/run          GET/POST/PUT .../implications
+GET /api/strat/env/ip-landscape            POST .../ip-landscape/run
+```
+### Core Logic
+1. Signals integrations se aate hain (news, filings, web monitors), duplicate collapse, relevance = keyword/entity match x competitor priority. Triage SLA breach par reminder.
+2. Five-forces scores roll up hoke market attractiveness index banata hai (Module 4 option scoring ko feed).
+3. Factor risk score = probability x impact x time-horizon weight. Threshold se upar factors strategy risk register mein auto-add.
+4. Regulatory factors compliance regulations register (2.0 Module 3) se synced, regulation change par naya factor/alert.
+5. Climate risk financial impact `exchange_rates` se group currency mein.
+6. Scenario run `scenarios` engine se, outputs strategy nodes ke metrics par.
+7. Har trend_implication kisi strategy node se linked hona chahiye warna "unactioned" flag.
+8. Technology assessment "adopt/pilot" hone par 2.0 Module 5 mein technology development project suggest.
+9. `audit_log` har action pe.
+
+---
+
+# MODULE 2: Market, Customer & Internal Assessment (1.1.2, 1.1.3)
+
+### FRONTEND: Screen 2: Market and Internal Assessment (4 tabs)
+
+**Tab 1. Research & Needs Capture** (1.1.2.1, 1.1.2.2)
+- Study designer: qualitative (interviews, focus groups, ethnography, diary) aur quantitative (surveys, conjoint, pricing studies). Questionnaire builder, sampling, panel management, consent, field tracking, data-quality checks (speeders, straight-lining).
+- Needs repository: jobs-to-be-done statements (functional/emotional/social), source tags, segment tags. VoC feed (2.0 Module 5 `voc_items` reuse).
+
+**Tab 2. Needs Assessment** (1.1.2.3)
+- Importance vs satisfaction, opportunity score, Kano classification, willingness-to-pay.
+- Segmentation (clustering, rule-based), segment sizing, unmet-needs map, needs to offering coverage matrix.
+
+**Tab 3. Organization, Operations & Process Baselines** (1.1.3.1, 1.1.3.2, 1.1.3.3)
+- Org profile: structure, spans/layers, workforce demographics, culture survey results, locations, legal entities (HR se).
+- Operations analysis: value chain, capacity utilisation, cycle times, cost-to-serve, quality, process mining results.
+- Process baselines: process catalog (APQC codes), KPI baselines with date/version/lock, as-is maps, maturity assessment, peer benchmark.
+
+**Tab 4. Systems, Financial Health & Core Competencies** (1.1.3.4, 1.1.3.5, 1.1.3.6)
+- Application portfolio: apps, owner, cost, lifecycle, tech debt, integration map, capability coverage.
+- Financial health: liquidity, leverage, margins, ROIC, cash conversion, segment P&L, trend, covenant headroom, capital allocation capacity.
+- Core competencies: capability inventory, VRIO scoring with evidence, skills data (HR), heatmap by BU, gap vs vision capabilities.
+
+### BACKEND: Tables
+```
+research_studies (id, title, objective, method[qual/quant/mixed], design_json, sample_json, budget, currency, start_date, end_date, owner_id, status)
+research_respondents (id, study_id, respondent_ref, segment_id, consent_ref, status)
+research_responses (id, study_id, respondent_id, answers_json, quality_flags_json, submitted_on)
+research_findings (id, study_id, finding, evidence_json, confidence)
+customer_needs (id, statement, need_type[functional/emotional/social], segment_id, source_ids_json, importance, satisfaction, opportunity_score, kano_class, wtp_json, status)
+segments (id, name, definition_json, size_json, growth_pct, as_of_date, status)
+org_profile_snapshots (id, entity_id, as_of_date, headcount, layers, avg_span, culture_json, locations_json)
+operations_metrics (id, process_id, metric, period, value, source)
+process_catalog (id, code, name, parent_id, owner_id, level, status)
+process_baselines (id, process_id, metric_id, baseline_value, baseline_date, method, version, locked)
+process_maps (id, process_id, version, diagram_json, status)
+maturity_assessments (id, process_id, dimension_scores_json, overall, benchmark_json, assessed_on)
+app_portfolio (id, name, vendor, category, owner_id, annual_cost, currency, lifecycle[plan/invest/maintain/retire], tech_debt_score, users_count, status)
+app_capability_map (id, app_id, capability_id, coverage_pct)
+financial_health_snapshots (id, entity_id, period, ratios_json, scores_json, covenants_json, currency)
+competency_catalog (id, name, definition, type[technical/process/relational/strategic])
+competency_assessments (id, competency_id, scope_type[enterprise/bu], scope_id, vrio_json, evidence_json, score, assessed_by, assessed_on)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/assess/studies    GET/POST .../studies/:id/respondents|responses    POST .../studies/:id/analyze
+GET/POST/PUT /api/strat/assess/needs      POST .../needs/score    GET/POST/PUT .../segments    POST .../segments/cluster
+GET/POST /api/strat/assess/org-profile    GET/POST .../operations-metrics    GET/POST/PUT .../process-baselines    POST .../process-baselines/:id/lock
+GET/POST/PUT /api/strat/assess/apps       GET .../financial-health?entity=X&period=Y
+GET/POST/PUT /api/strat/assess/competencies    GET .../competencies/heatmap
+```
+### Core Logic
+1. Research mein consent mandatory, consent nahi to response analytics mein nahi aata. Region rules `country_config` se.
+2. Opportunity score = importance + max(importance - satisfaction, 0). Models config se, Kano aur WTP alag layers.
+3. Baseline lock hone ke baad value change sirf new version se, reason ke saath.
+4. Financial health ratios Ledger/ERP se auto-pull, formulas versioned.
+5. Org profile HR core se as-of date snapshot, spans/layers auto-calc.
+6. Competency gap = vision ke required capabilities (Module 3) minus assessed strength.
+7. Needs ka coverage 2.0 Module 1 portfolio ke offerings se map, uncovered needs opportunity list mein.
+8. `audit_log` har action pe.
+
+---
+
+# MODULE 3: Vision, Mission & Restructuring (1.1.4, 1.1.5, 1.2.1)
+
+### FRONTEND: Screen 3: Vision, Mission and Deals (4 tabs)
+
+**Tab 1. Strategic Vision & Alignment** (1.1.4.1, 1.1.4.2)
+- Vision workspace: drafts, options, ambition metrics (north-star, horizon targets), evidence links (Module 1-2), scenario support, version history, board approval.
+- Stakeholder map (influence/interest/stance), alignment tracker (commitment level, concerns log, owner), pulse surveys, sign-offs.
+
+**Tab 2. Mission** (1.2.1.1, 1.2.1.2)
+- Define current business: customers, needs, offerings, geographies, value-chain scope, revenue by segment (portfolio se pre-fill).
+- Mission drafting, purpose and values, test against criteria (clarity, distinctiveness, measurability), version, approval.
+
+**Tab 3. Restructuring Opportunities & Due Diligence** (1.1.5.1, 1.1.5.2)
+- Opportunity pipeline: divest, carve-out, spin, merge, acquire, JV, shared services, exit. Screening score, target long-list.
+- DD workspace: workstreams (financial, legal, tax, commercial, operational, HR, IT/cyber, ESG, IP, regulatory), request lists, VDR link, Q&A, findings with severity and value impact, clean-team/insider list.
+
+**Tab 4. Deal Options** (1.1.5.3.1 to 1.1.5.3.4)
+- Option cards: acquisition, merger, de-merger, divestiture. Structure, consideration, financing, tax, timeline.
+- Valuation (DCF, comps, precedents, LBO, sum-of-parts, football field), synergy and dis-synergy with phasing, regulatory filings (merger control), risks, employee impact.
+- Side-by-side compare, board paper generator, decision.
+
+### BACKEND: Tables
+```
+strategic_visions (id, cycle_id, version, statement, ambition_json, horizon_year, status[draft/review/approved/superseded], approved_by, approved_on)
+vision_metrics (id, vision_id, metric, baseline, target, target_year)
+stakeholders (id, stakeholder_type, party_ref/employee_ref, influence, interest, stance)
+stakeholder_alignment (id, vision_id, stakeholder_id, commitment_level, concerns_json, last_engaged_on, owner_id)
+alignment_pulses (id, vision_id, audience_json, questions_json, results_json, run_on)
+business_definitions (id, cycle_id, customers_json, needs_json, offerings_json, geographies_json, value_chain_json, as_of_date)
+mission_statements (id, cycle_id, version, mission_text, purpose, values_json, status, approved_by)
+mission_tests (id, mission_id, criterion, score, notes)
+restructuring_opportunities (id, opp_type[divest/carve_out/spin/merge/acquire/jv/shared_services/exit], title, rationale, units_json, est_value, currency, screening_score, restricted_project_id, status)
+screening_criteria (id, name, weight, scale_json, status)
+deal_targets (id, name, sector, country_id, financials_json, fit_score, source, status)
+dd_projects (id, opportunity_id, code_name, side[buy/sell], restricted_project_id, target_close_date, status)
+dd_workstreams (id, dd_project_id, workstream, lead_id, status)
+dd_requests (id, dd_project_id, workstream_id, request, priority, due_date, document_id, status)
+dd_qna (id, dd_project_id, question, answer, asked_by, answered_by, approval_request_id, status)
+dd_findings (id, dd_project_id, workstream_id, severity, finding, value_impact, currency, mitigation, status)
+insider_lists (id, restricted_project_id, person_ref, added_on, removed_on, reason)
+deal_options (id, opportunity_id, deal_type[acquisition/merger/demerger/divestiture], structure_json, consideration_json, financing_json, tax_json, timeline_json, status)
+valuations (id, deal_option_id, method[dcf/comps/precedent/lbo/sotp], inputs_json, low, mid, high, currency, version)
+synergy_items (id, deal_option_id, synergy_type[revenue/cost/dis_synergy/one_time_cost], description, annual_value, phasing_json, probability, owner_id)
+deal_regulatory_filings (id, deal_option_id, authority_id, filing_type, threshold_test_json, required, status, filed_on, cleared_on)
+deal_decisions (id, deal_option_id, decision, rationale, decided_by, decided_on, approval_request_id)
+merger_control_rules (id, jurisdiction, test_type[asset/turnover/deal_value/market_share], params_json, review_clock_days, suspensory, effective_from, source_ref)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/vision/visions    PUT .../visions/:id/approve    GET/POST .../visions/:id/metrics
+GET/POST/PUT /api/strat/vision/stakeholders    GET/POST/PUT .../alignment    POST .../pulses/run
+GET/POST/PUT /api/strat/vision/business-definition    GET/POST/PUT .../mission    POST .../mission/:id/test
+GET/POST/PUT /api/strat/deals/opportunities    POST .../opportunities/:id/screen    GET/POST/PUT .../targets
+GET/POST/PUT /api/strat/deals/dd-projects    GET/POST/PUT .../dd-projects/:id/requests|qna|findings    GET .../dd-projects/:id/report
+GET/POST/PUT /api/strat/deals/options    POST .../options/:id/valuate    GET .../options/compare?ids=1,2    POST .../options/:id/filing-check
+```
+### Core Logic
+1. Vision approve hone ke baad immutable, edit = naya version. Har ambition metric Module 6 ke measure se linked.
+2. Alignment dashboard: commitment level threshold se neeche wale key stakeholders par action task.
+3. Business definition portfolio/segments se prefill, mission approval ke liye definition current honi chahiye.
+4. M&A/restructuring projects `restricted_projects` mein, insider list, wall rules, masked views, har document access logged.
+5. Merger control engine `merger_control_rules` se: asset/turnover/deal-value thresholds evaluate, interconnected transactions group karke ek combination, suspensory jurisdiction mein clearance se pehle closing step block (gun-jumping guard).
+6. DD red-flag finding ka value impact valuation mein adjustment ke roop mein auto-reflect, purchase price/earn-out suggestions.
+7. Synergies risk-adjusted (value x probability) aur phasing ke saath NPV mein, one-time integration cost alag.
+8. Deal option compare: NPV, accretion/dilution, leverage impact, risk score, time to close.
+9. Deal approved hone par integration planning handoff (Module 8 initiative + HR org model Module 5).
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 4: Strategic Options & Enterprise Strategy (1.2.2, 1.2.3, 1.2.4)
+
+### FRONTEND: Screen 4: Strategy Formulation (5 tabs)
+
+**Tab 1. Define & Assess Options** (1.2.2.1, 1.2.2.1.1, 1.2.2.2, 1.2.2.2.1, 1.2.2.2.2)
+- Option generation (vision gaps, SWOT, growth vectors, 3 horizons), option cards with mission fit, investment, risk.
+- Extended-enterprise partnerships: partner candidates, fit scoring, ecosystem map.
+- Impact assessment: operating-model elements (people, process, technology, governance, location, finance, suppliers) aur technology implications (applications, data, infrastructure, security) with effort and cost. Scoring and compare, scenarios.
+
+**Tab 2. Market & Channel Options** (1.2.2.3, 1.2.2.4, 1.2.2.5)
+- B2B (key accounts, marketplaces, distributors, contract models), B2C (D2C, retail, marketplaces, subscriptions), partner/alliance (JV, licensing, co-development, reseller, ecosystem).
+- Unit economics (CAC, LTV, margin), channel conflict analysis, partner fit, term-sheet draft.
+
+**Tab 3. Capability Options** (1.2.2.6 to 1.2.2.11)
+- IP acquisition (buy/license/build), innovation (open innovation, CVC, labs, M&A), sustainability (decarbonization pathways, abatement cost curve, circularity), global support (hubs, follow-the-sun, outsourcing), shared services (scope, location, cost-benefit, FTE impact), lean/continuous improvement (value stream, savings potential).
+
+**Tab 4. Long-Term Enterprise Strategy** (1.2.3.1 to 1.2.3.7)
+- Strategy documents: partner/alliance, sustainability, M&A/demerger/exit, innovation, global support, shared services, lean/CI. Each: objectives, initiatives, KPIs, owners, roadmap, version, approval.
+- Sustainability: double-materiality assessment, targets, transition plan.
+
+**Tab 5. Cross-Functional Alignment** (1.2.4)
+- Alignment matrix: enterprise strategy x function/process strategies (HR, Finance, IT, Ops, Sales, Product, Supply chain, Legal).
+- Conflicts register (resource, timing, priority), dependencies, resolution, function-head sign-offs, coverage gaps.
+
+### BACKEND: Tables
+```
+strategic_options (id, cycle_id, name, option_type, description, growth_vector, horizon[h1/h2/h3], mission_fit_score, investment, currency, status[idea/assessed/shortlisted/selected/rejected/parked])
+option_assessments (id, option_id, scoring_model_id, scores_json, total_score, assessor_id, version)
+option_impacts (id, option_id, area[operating_model/technology], element[people/process/technology/governance/location/finance/suppliers/applications/data/infra/security], impact_level, change_description, effort_estimate, cost_estimate, currency)
+partner_candidates (id, option_id, party_id, partner_type, fit_score, criteria_json, status)
+ecosystem_maps (id, cycle_id, nodes_json, edges_json, version)
+channel_options (id, option_id, channel_type[b2b/b2c], model, market_size, unit_economics_json, cac, ltv, margin_pct, conflicts_json, risks_json)
+alliance_options (id, option_id, alliance_type[jv/licensing/co_dev/reseller/ecosystem], partner_id, terms_json, valuation_json)
+capability_options (id, option_id, capability_type[ip/innovation/sustainability/global_support/shared_services/lean], business_case_json, kpis_json)
+decarb_pathways (id, option_id, levers_json, abatement_tonnes, cost_per_tonne, timeline_json)
+shared_services_cases (id, option_id, processes_json, locations_json, fte_json, cost_benefit_json)
+enterprise_strategies (id, cycle_id, strategy_type[partner_alliance/sustainability/ma_exit/innovation/global_support/shared_services/lean_ci], version, content, objectives_json, owner_id, status, approval_request_id)
+sustainability_materiality (id, strategy_id, topic, financial_materiality, impact_materiality, is_double_material, stakeholders_json, assessed_on)
+sustainability_targets (id, strategy_id, target, baseline, target_value, target_year, framework)
+function_strategies (id, function, name, version, owner_id, document_id, status)
+alignment_matrix (id, enterprise_strategy_id, function_strategy_id, alignment_score, gaps_json, status)
+alignment_conflicts (id, a_ref, b_ref, conflict_type, description, owner_id, resolution, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/options    POST .../options/:id/assess    GET .../options/compare?ids=1,2,3    POST .../options/:id/select
+GET/POST/PUT /api/strat/options/impacts    GET/POST/PUT .../partners    GET/PUT .../ecosystem
+GET/POST/PUT /api/strat/options/channels    GET/POST/PUT .../alliances    GET/POST/PUT .../capability-options
+GET/POST/PUT /api/strat/strategy/enterprise    PUT .../enterprise/:id/publish    GET/POST .../sustainability/materiality    GET/POST/PUT .../sustainability/targets
+GET/POST/PUT /api/strat/strategy/function-strategies    GET .../alignment/matrix    GET/POST/PUT .../alignment/conflicts
+```
+### Core Logic
+1. Option score = weighted criteria (`scoring_models`), market attractiveness Module 1 five-forces se, capability fit Module 2 competencies se.
+2. Selected option strategy node ban jata hai (`strategy_nodes`), rejected/parked ka reason log.
+3. Impact assessment ka operating-model part Module 5 (org design) aur technology part application portfolio (Module 2) ko feed.
+4. Alliance/partner option select hone par partner onboarding aur (agar M&A) Module 3 deal option link.
+5. Sustainability strategy mein double-materiality topics mandatory; framework mapping (CSRD/ESRS, ISSB, BRSR) `country_config` se, kis entity par kaun sa lagu hai.
+6. Enterprise strategy publish tabhi jab objectives defined hon (Module 6 link) aur unresolved high-severity conflicts na hon.
+7. Alignment score = covered objectives / total, coverage gap (strategy theme jiska function plan nahi) auto-flag.
+8. Conflicts mein resource/timing clash capacity data se detect (HR/PPM).
+9. Strategy versions, baseline aur decision log.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 5: Organization Design (1.2.5)
+
+### FRONTEND: Screen 5: Organization Design Studio (4 tabs)
+
+**Tab 1. Structure & Role Mapping** (1.2.5.1, 1.2.5.2)
+- Structure analytics: layers, span (avg/min/max), management ratio, headcount, cost by unit, duplication, heatmaps.
+- Role inventory: purpose, activities, time allocation, value-added classification (VA / business-VA / non-VA), overlaps and gaps.
+
+**Tab 2. Role Activity Diagrams** (1.2.5.3, 1.2.5.6)
+- RAD editor: roles as swimlanes, activities, hand-offs, decision points. Hand-off metrics (count, wait time, rework).
+- Key process role analysis: bottlenecks, accountability gaps, cycle-time simulation, BPMN export.
+
+**Tab 3. Redesign Workshops & Unit Relationships** (1.2.5.4, 1.2.5.5)
+- Workshop planner: agenda, participants, canvas, voting, decisions, action items, design principles.
+- Unit relationships: reporting, dotted-line, service-provider SLAs, governance forums, decision rights (RAPID/DACI), interface catalog.
+
+**Tab 4. Alternatives Assessment & Migration** (1.2.5.7, 1.2.5.8)
+- Alternatives: functional/divisional/matrix/flat/network models built as scenarios, side-by-side with cost, headcount, span, layers, risk, capability and retention impact, plus implications (people, legal, location, tax, systems, customers).
+- Migration: waves, position mapping (old to new), cutover dates, consultation tracker (works council/union/regulator), change impact, comms, training, readiness, hypercare, post-migration review.
+
+### BACKEND: Tables
+```
+org_models (id, name, base_hierarchy_id, effective_date, model_type[baseline/scenario], status, created_by)
+org_model_nodes (id, model_id, org_unit_ref, parent_id, name, node_type, head_id, headcount, fte, cost, currency)
+org_model_positions (id, model_id, position_ref, node_id, change_type[none/move/create/eliminate/merge/reclass], from_node_id, cost, currency)
+org_metrics_snapshots (id, model_id, layers, avg_span, mgmt_ratio, total_headcount, total_cost, computed_at)
+role_inventory (id, role_ref, name, unit_id, purpose, headcount)
+role_activities (id, role_id, activity, process_ref, time_pct, value_class[va/bva/nva], frequency)
+rad_diagrams (id, process_ref, name, version, diagram_json, status)
+rad_handoffs (id, rad_id, from_role, to_role, activity, avg_wait_hours, rework_pct, volume)
+decision_rights (id, decision, framework[rapid/daci/raci], assignments_json, unit_scope)
+design_workshops (id, title, objective, workshop_date, facilitator_id, participants_json, board_ref, status)
+workshop_outputs (id, workshop_id, output_type[decision/principle/action/idea], content, owner_id, due_date)
+unit_relationships (id, unit_a_id, unit_b_id, rel_type[reporting/dotted/service_provider/partner/governance], sla_json, interfaces_json, effective_from)
+org_alternatives (id, name, model_id, structure_type, description, scores_json, status)
+alt_implications (id, alternative_id, area[people/legal/location/tax/systems/customers], description, severity, cost, currency)
+migration_plans (id, alternative_id, name, target_cutover, status, approval_request_id)
+migration_waves (id, plan_id, wave_no, scope_json, cutover_date, status)
+position_mappings (id, plan_id, old_position_id, new_position_id, employee_id, action[move/redeploy/redundancy/retain/new_hire], effective_date, status)
+consultation_tracker (id, plan_id, body[works_council/union/regulator], country_id, requirement, notice_date, due_date, status, document_id)
+change_impacts (id, plan_id, stakeholder_group, impact_level, actions_json)
+readiness_checks (id, plan_id, check_item, status, owner_id)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/org/models    POST .../models/:id/clone    GET .../models/:id/metrics    GET .../models/compare?a=X&b=Y
+PUT .../models/:id/positions    GET/POST/PUT .../roles    GET/POST/PUT .../role-activities
+GET/POST/PUT /api/strat/org/rad    GET .../rad/:id/handoff-analysis    POST .../rad/:id/simulate
+GET/POST/PUT /api/strat/org/workshops    GET/POST .../workshops/:id/outputs    GET/POST/PUT .../relationships    GET/POST/PUT .../decision-rights
+GET/POST/PUT /api/strat/org/alternatives    POST .../alternatives/:id/select
+GET/POST/PUT /api/strat/org/migration    POST .../migration/:id/cutover    GET/POST/PUT .../consultations
+```
+### Core Logic
+1. Org model baseline HR core (`org_units`, `positions`, `employee_assignments`) se clone hota hai. Scenario edit live HR data ko affect nahi karta.
+2. Metrics (layers, spans, mgmt ratio, cost, headcount) har move par auto-recalc aur baseline ke saath delta dikhta hai. Position-level cost aur vacancy modeling included.
+3. Scenario cost mein severance/redeployment cost HR Total Rewards severance simulator se, retention/internal mobility risk analytics se.
+4. Approval ke baad hi migration plan banta hai. Plan mein har affected employee ka position mapping zaruri.
+5. Consultation tracker `country_config` se: kis country mein kaun si consultation/notice zaruri, due date tak complete na ho to cutover block.
+6. Cutover par `business_events` (effective-dated) HR core ko jaate hain: org unit, position, manager, cost center changes. Rollback event bhi available.
+7. Sensitive scenarios `restricted_projects` ke through need-to-know, employee-level data masked.
+8. RAD hand-off analysis: wait time ya rework threshold cross karne wale hand-offs flag.
+9. Post-migration review: planned vs actual spans, cost, attrition, process KPIs.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 6: Objectives & Business Unit Strategy (1.2.6, 1.2.7)
+
+### FRONTEND: Screen 6: Objectives and BU Strategy (3 tabs)
+
+**Tab 1. Objectives & Baselines** (1.2.6.1, 1.2.6.2)
+- Objective library with perspectives (financial/customer/process/people), strategy map, OKR cascade (enterprise to BU to function to team).
+- Measures: formula, source, baseline (value, date, method, lock), multi-year targets (committed vs stretch), weights, owner.
+
+**Tab 2. Performance Monitoring** (1.2.6.3)
+- Scorecards, RAG, trend, forecast-to-target, variance commentary, drill-down, check-ins, alerts, root-cause actions, exec dashboard, what-if.
+
+**Tab 3. Business Unit Strategies** (1.2.7.1, 1.2.7.2, 1.2.7.3)
+- BU analysis: SWOT, market position, portfolio role (grow/hold/harvest/fix/exit), financial plan, competitors.
+- BU core competencies (Module 2 catalog se).
+- Refine to org strategy: alignment score, resource ask vs allocation, target reconciliation (sum of BU targets vs enterprise target), capital allocation, version, approval.
+
+### BACKEND: Tables
+```
+objectives (id, cycle_id, level[enterprise/bu/function/team], parent_id, perspective, name, description, owner_id, weight, strategy_node_id, status, version)
+key_results (id, objective_id, name, measure_id, baseline_id, target, stretch_target, threshold_json, due_date, weight, status)
+measures (id, name, formula_json, unit, direction[higher_better/lower_better], data_source, frequency, owner_id, status)
+measure_baselines (id, measure_id, scope_ref, value, as_of_date, method, locked, locked_by)
+measure_values (id, measure_id, scope_ref, period, value, source)
+measure_targets (id, measure_id, scope_ref, period, target, green_min_pct, amber_min_pct, effective_from)
+objective_progress (id, objective_id, period, score, rag, commentary, forecast_value, updated_by)
+checkins (id, objective_id, key_result_id, checkin_date, status, confidence, note, author_id)
+review_actions (id, objective_id, action, owner_id, due_date, status)
+bu_strategies (id, bu_id, cycle_id, version, bu_role[grow/hold/harvest/fix/exit], summary, swot_json, financial_plan_json, resource_ask_json, status, approval_request_id)
+bu_competencies (id, bu_id, competency_id, strength_score, evidence_json)
+bu_alignment_reviews (id, bu_strategy_id, alignment_score, gaps_json, refinement_actions_json, reviewed_by, reviewed_on)
+target_reconciliations (id, cycle_id, measure_id, enterprise_target, sum_bu_targets, gap, status)
+capital_allocations (id, bu_id, cycle_id, requested, allocated, currency, rationale)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/objectives    GET .../objectives/tree    POST .../objectives/:id/key-results
+GET/POST/PUT /api/strat/measures      POST .../measures/:id/baseline|lock|values    GET/POST/PUT .../targets
+GET /api/strat/performance/scorecard?cycle=X&scope=Y    GET .../performance/forecast    POST .../checkins
+GET/POST/PUT /api/strat/bu-strategies    POST .../bu-strategies/:id/align    GET .../reconciliation    GET/POST/PUT .../capital-allocations
+```
+### Core Logic
+1. Har objective strategy node se linked, warna orphan flag. Parent score = children ka weighted average.
+2. Baseline lock ke baad change sirf new version aur reason ke saath, aur monitoring hamesha locked baseline se.
+3. RAG thresholds `measure_targets` se (green/amber min %), default hardcode nahi.
+4. Forecast-to-target run-rate/trend se, miss hone ki probability par early alert.
+5. Values data sources se auto-pull (Finance, CRM, HR, Ops), manual entry audit ke saath.
+6. Target reconciliation: sum of BU targets < enterprise target to gap flag aur action.
+7. BU strategy approval ke liye competency evidence aur alignment score threshold zaruri.
+8. Capital allocation total budget se zyada nahi (validation), multi-currency roll-up.
+9. Scorecard "as-of" kisi bhi period ke liye.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 7: Customer Experience Strategy (1.2.8)
+
+### FRONTEND: Screen 7: Customer Experience Strategy (5 tabs)
+
+**Tab 1. CX Assessment** (1.2.8.1.1, 1.2.8.1.2, 1.2.8.1.3)
+- Touchpoint inventory (channel, owner, systems, volume). Measurements per touchpoint x segment: NPS, CSAT, CES, sentiment, drop-off, complaints.
+- Root-cause analysis (5-why, fishbone, process mining, text analytics), issue backlog with severity and owner, CX index.
+
+**Tab 2. Personas & Journey Maps** (1.2.8.2.1, 1.2.8.2.2)
+- Persona library (data-backed, segment-linked, versioned).
+- Journey map builder: stages, actions, emotions, pain points, moments of truth, touchpoints, systems, metrics overlay. As-is vs to-be, variants by persona/segment/country.
+
+**Tab 3. Single View of Customer** (1.2.8.2.3)
+- Entity model (person, household, account, B2B org hierarchy), identifier graph, match rules (deterministic/probabilistic), survivorship, golden profile, merge/unmerge with audit.
+- Consent and preferences (purpose x channel), data quality, DSAR workflows (access/erasure/correction/portability), customer 360 view, activation APIs.
+
+**Tab 4. CX Vision, Validation, Brand & Content** (1.2.8.2.4 to 1.2.8.2.7)
+- CX vision, principles, goals. Customer validation (concept tests, co-creation, panels, A/B). Brand values alignment checks, link to business strategy.
+- Content strategy: content model, taxonomy, channels, governance, calendar, localization, accessibility, personalization rules.
+
+**Tab 5. Support Structure & Roadmap** (1.2.8.3.1, 1.2.8.3.2, 1.2.8.4)
+- Required capabilities (data, tech, process, people, governance), current vs target maturity.
+- Impact on functional processes (change list, owner, effort). CX operating model (CX office, governance).
+- Roadmap: initiatives, dependencies, phasing, benefits, investment (Module 8 se linked).
+
+### BACKEND: Tables
+```
+touchpoints (id, name, channel, stage, owner_id, systems_json, volume, status)
+cx_measurements (id, touchpoint_id, segment_id, metric[nps/csat/ces/sentiment/dropoff/complaint_rate], period, value, sample_size, source)
+cx_issues (id, touchpoint_id, description, severity, impact_json, owner_id, status)
+rca_records (id, issue_id, method, causes_json, root_cause, corrective_actions_json)
+personas (id, name, segment_id, description, goals_json, pains_json, behaviors_json, data_basis_json, version, status)
+journey_maps (id, name, persona_id, map_type[as_is/to_be], scope, country_id, version, status)
+journey_stages (id, map_id, stage_no, name, actions_json, emotions_json, pain_points_json, opportunities_json, moment_of_truth, metrics_json)
+journey_touchpoint_links (id, stage_id, touchpoint_id)
+customer_entities (id, entity_type[person/household/account/b2b_org], golden_id, attributes_json, parent_entity_id, status, created_at)
+customer_identifiers (id, entity_id, id_type[email/phone/device/crm_id/loyalty/cookie], value_hash, source_system, confidence, first_seen, last_seen)
+identity_match_rules (id, rule_type[deterministic/probabilistic], config_json, threshold, priority, status)
+identity_match_events (id, entity_a_id, entity_b_id, score, decision[auto_merge/review/reject/unmerge], decided_by, decided_on)
+survivorship_rules (id, attribute, source_priority_json)
+customer_consents (id, entity_id, purpose, channel, legal_basis, status[granted/denied/withdrawn], captured_at, source, evidence_ref, expires_at, jurisdiction)
+dsar_requests (id, entity_id, request_type[access/erasure/correction/portability/grievance], received_on, due_date, status, linked_identifiers_json)
+cx_visions (id, cycle_id, version, statement, principles_json, goals_json, status)
+cx_validations (id, vision_id, journey_map_id, method, participants_json, consent_ref, results_json, conclusion)
+brand_values (id, name, definition, behaviors_json)
+brand_alignment_checks (id, subject_type, subject_id, scores_json, findings, checked_by)
+content_strategies (id, cycle_id, content_model_json, taxonomy_json, channels_json, governance_json, localization_json, version)
+content_calendar (id, strategy_id, item, channel, persona_id, publish_date, owner_id, status)
+cx_capabilities (id, name, domain[data/tech/process/people/governance], current_maturity, target_maturity, gap, owner_id)
+cx_process_impacts (id, process_ref, change, function, owner_id, effort, status)
+cx_roadmap_items (id, name, capability_id, initiative_id, start_date, end_date, dependency_ids_json, benefit_json, investment, currency, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/cx/touchpoints    GET/POST .../measurements    GET .../cx-index    GET/POST/PUT .../issues    POST .../issues/:id/rca
+GET/POST/PUT /api/strat/cx/personas       GET/POST/PUT .../journey-maps    GET/PUT .../journey-maps/:id/stages
+GET /api/strat/cx/customers/:id           POST .../identity/resolve    POST .../identity/merge|unmerge    GET/POST/PUT .../identity/rules
+GET/POST/PUT /api/strat/cx/consents       POST .../consents/:id/withdraw    GET/POST/PUT .../dsar
+GET/POST/PUT /api/strat/cx/vision    POST .../validations    GET/POST/PUT .../brand-checks    GET/POST/PUT .../content-strategy
+GET/POST/PUT /api/strat/cx/capabilities    GET/POST/PUT .../process-impacts    GET/POST/PUT .../roadmap
+```
+### Core Logic
+1. CX measurements surveys, support, product analytics aur CRM se, minimum sample size rule (chhote sample par warning).
+2. Issue severity x affected volume se priority, RCA complete hone par corrective action initiative (Module 8) ya CX roadmap item.
+3. Identity resolution staged: deterministic pehle, phir probabilistic threshold se auto-merge/review queue. Unmerge ke liye full audit, aur resolution ek continuous operation (ongoing match quality KPIs).
+4. Consent purpose x channel x jurisdiction par enforce hota hai. Withdraw par change connected systems tak propagate, aur downstream segments/audiences se auto-removal.
+5. DSAR linked identifiers par chalta hai, due date `country_config` se, aur erasure par downstream systems + backups ka task.
+6. Persona data-basis (research evidence) ke bina approve nahi, review date par stale flag.
+7. Journey stage metrics touchpoint measurements se live. To-be map approve hone par roadmap items auto-suggest.
+8. Customer validation mein consent mandatory (Module 2 jaisa).
+9. Capability gap = target - current maturity, roadmap ke bina gap warning.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 8: Strategic Initiatives (1.3)
+
+### FRONTEND: Screen 8: Strategic Initiative Management (5 tabs)
+
+**Tab 1. Develop Initiatives** (1.3.1.1, 1.3.1.2, 1.3.1.3)
+- Strategic priorities register, initiative proposals (business case, customer value, cost, risk, timeline), idea-to-initiative conversion, templates, dependencies.
+- Stakeholder review (comments, feedback, sign-off).
+
+**Tab 2. Evaluate Initiatives** (1.3.2.1, 1.3.2.2)
+- Business value model (NPV/IRR/payback, strategic fit, risk-adjusted) aur customer value model (NPS, retention, CX metrics, segment value).
+- Benefit hypotheses with baseline measures, sensitivity analysis, scoring.
+
+**Tab 3. Select, Prioritize & Communicate** (1.3.3.1, 1.3.3.2)
+- Prioritization (weighted scoring, budget/capacity-constrained optimizer, scenario compare), funding decisions with rationale.
+- Communication to BUs/stakeholders (targeted packs, acknowledgements), roadmap view.
+
+**Tab 4. High-Level Measures** (1.3.4.1, 1.3.4.2, 1.3.4.3)
+- Value driver tree (initiative to driver to outcome), baselines, monitoring vs baseline, benefits realization (planned vs realized), Finance validation.
+
+**Tab 5. Execute, Review & Refine** (1.3.5, 1.3.6, 1.3.7)
+- Execution: milestones, RAID, budget, resources, PPM/Jira sync, status reports.
+- Reviews: QBR/stage-gate, health RAG, continue/pivot/stop decisions.
+- Refinement: re-baselining with approval, plan versions, portfolio rebalance, lessons learned.
+
+### BACKEND: Tables
+```
+strategic_priorities (id, cycle_id, name, description, objective_ids_json, rank, status)
+initiatives (id, cycle_id, code, name, description, priority_id, objective_id, sponsor_id, owner_id, initiative_type, status[proposed/evaluating/selected/funded/executing/paused/completed/cancelled], current_gate, start_date, end_date, budget, currency, health_rag, version)
+initiative_business_cases (id, initiative_id, version, cash_flows_json, npv, irr, payback_months, risk_adjusted_json, assumptions_json, currency)
+initiative_value_models (id, initiative_id, value_type[business/customer], metrics_json, score, method)
+benefit_hypotheses (id, initiative_id, driver_id, metric_id, baseline_ref, expected_uplift, timing_json, confidence)
+initiative_stakeholder_reviews (id, initiative_id, stakeholder_id, feedback, decision, reviewed_on)
+initiative_dependencies (id, initiative_id, depends_on_id, dependency_type)
+initiative_scores (id, initiative_id, scoring_model_id, scores_json, total_score)
+prioritization_scenarios (id, cycle_id, name, constraints_json, selected_ids_json, total_value, total_cost, status)
+selection_decisions (id, initiative_id, decision, rationale, decided_by, decided_on, approval_request_id)
+initiative_comms (id, initiative_id, audience_json, message, channel, sent_on, ack_count)
+value_drivers (id, cycle_id, name, parent_id, measure_id, driver_type, owner_id)
+driver_baselines (id, driver_id, value, as_of_date, locked)
+driver_values (id, driver_id, period, value)
+benefit_realization (id, initiative_id, hypothesis_id, period, planned, realized, finance_validated, validated_by, currency)
+initiative_milestones (id, initiative_id, name, due_date, completed_on, status)
+initiative_raid (id, initiative_id, raid_type[risk/assumption/issue/dependency], description, severity, owner_id, status)
+initiative_status_reports (id, initiative_id, period, rag_json, progress_pct, spend, commentary, author_id)
+initiative_reviews (id, cycle_id, review_type[qbr/gate/ad_hoc], review_date, decisions_json)
+initiative_changes (id, initiative_id, change_type[scope/budget/timeline/stop/pivot/rebaseline], reason, before_json, after_json, approval_request_id, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/initiatives    POST .../initiatives/:id/submit|evaluate|score    GET .../initiatives/:id/business-case
+GET/POST/PUT /api/strat/priorities    GET/POST/PUT .../scenarios    POST .../scenarios/:id/optimize    POST .../initiatives/:id/decide
+POST .../initiatives/:id/communicate    GET .../roadmap
+GET/POST/PUT /api/strat/value-drivers    GET/POST .../drivers/:id/values    GET .../benefits?initiative=X    POST .../benefits/:id/validate
+GET/POST .../initiatives/:id/milestones|raid|status-reports    POST .../initiatives/:id/change    POST .../reviews    GET .../portfolio/rebalance
+```
+### Core Logic
+1. Har initiative kisi objective se linked (strategy node), aur evaluation + business case ke bina selection nahi.
+2. Value = business value x customer value (config weights). Risk-adjusted NPV, sensitivity aur scenario compare.
+3. Optimizer budget + capacity (HR/PPM) + dependency constraints ke andar best value mix nikalta hai. Rejected/deferred ka rationale mandatory.
+4. Selected hone par Stage-Gate Engine chalta hai, execution PPM/Jira ke saath sync (`integration_mappings`).
+5. Benefit realization Finance validate kare tabhi "realized" count hota hai, baseline locked drivers se.
+6. Health RAG rules: milestones slip, spend variance, risk severity se auto.
+7. Change (scope/budget/timeline) threshold se upar to re-approval. Stop/pivot par budget release hota hai aur portfolio rebalance suggestion.
+8. Re-baselining naya plan version, purana history mein.
+9. Lessons learned next cycle ke scoring/assumptions ko update karte hain.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 9: Business Models & Strategy Communication (1.4, 1.2.9, 1.1.4.3, 1.2.1.3)
+
+### FRONTEND: Screen 9: Business Models and Communication (3 tabs)
+
+**Tab 1. Develop & Adopt Business Models** (1.4.1.1 to 1.4.1.4)
+- Canvas (segments, value propositions, channels, relationships, revenue streams, resources, activities, partners, cost structure), unit economics, scenarios.
+- Assemble information (strategy, financial model, customer data auto-pull), approvals, integration points with existing models (shared resources, systems, customers, capabilities, cannibalization), adoption plan (owners, effective date, rollout).
+
+**Tab 2. Maintain & Govern Business Models** (1.4.2.1 to 1.4.2.4, 1.4.3)
+- Maintenance parameters: review frequency, triggers (KPI breach, market shift), thresholds, owners.
+- Feedback intake (ops, finance, customers, KPI signals, audit, market), triage and priority score, update workflow (change, new version, approval, publish).
+- Governance: council and charter, decision rights, standards/naming/taxonomy, model registry, exception handling, attestations, health score.
+
+**Tab 3. Strategy Communication** (1.2.9, 1.1.4.3, 1.2.1.3)
+- Plan by audience (employees, board, investors, regulators, customers, partners, media), message house per vision/mission/strategy, channels, multi-language, scheduling.
+- Approvals (legal/IR disclosure review), quiet periods, read/acknowledge tracking, feedback/Q&A, effectiveness (awareness/understanding/commitment surveys).
+
+### BACKEND: Tables
+```
+business_models (id, cycle_id, name, model_type[core/new/adjacent/transformational], parent_model_id, version, status[draft/in_review/approved/adopted/retired], effective_from, owner_id, approval_request_id)
+bm_canvas_blocks (id, model_id, block[segments/value_props/channels/relationships/revenue/resources/activities/partners/costs], content_json)
+bm_unit_economics (id, model_id, assumptions_json, results_json, currency)
+bm_scenarios (id, model_id, name, assumptions_json, results_json)
+bm_integration_points (id, model_id, existing_model_id, point_type[shared_resource/system/customer/capability/financial/cannibalization], description, impact, owner_id, status)
+bm_adoption_plans (id, model_id, steps_json, owners_json, effective_date, status)
+bm_maintenance_params (id, model_id, review_frequency, triggers_json, thresholds_json, owner_id, effective_from)
+bm_feedback (id, model_id, source[ops/finance/customer/kpi_signal/audit/market], description, impact, urgency, priority_score, status[new/triaged/accepted/rejected/implemented], submitted_by)
+bm_updates (id, model_id, feedback_ids_json, change_summary, from_version, to_version, approval_request_id, status)
+bm_governance_bodies (id, name, charter_doc_id, members_json, cadence, decision_rights_json)
+bm_policies (id, name, standard_json, applies_to, version, status)
+bm_attestations (id, model_id, attested_by, attested_on, result)
+bm_health (id, model_id, period, score, metrics_json)
+comm_plans (id, cycle_id, subject_node_id, name, status)
+comm_audiences (id, plan_id, segment_name, criteria_json, size)
+comm_messages (id, plan_id, audience_id, message_house_json, channel, language_code, content_ref, scheduled_at, sent_at, status, approval_request_id, disclosure_review_status)
+comm_receipts (id, message_id, recipient_ref, delivered, read_at, acknowledged_at)
+comm_feedback (id, message_id, text, sentiment, responded_by)
+comm_effectiveness (id, plan_id, metric[awareness/understanding/commitment], value, survey_ref, period)
+disclosure_calendar (id, entity_id, event, quiet_period_start, quiet_period_end)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/strat/bm/models    GET/PUT .../models/:id/canvas    POST .../models/:id/unit-economics|scenarios|submit|adopt
+GET/POST/PUT /api/strat/bm/integration-points    GET/POST/PUT .../adoption-plans
+GET/PUT /api/strat/bm/maintenance-params    GET/POST/PUT .../feedback    POST .../feedback/:id/triage    GET/POST/PUT .../updates    POST .../updates/:id/publish
+GET/POST/PUT /api/strat/bm/governance    GET/POST .../attestations    GET .../health
+GET/POST/PUT /api/strat/comms/plans    GET/POST/PUT .../messages    POST .../messages/:id/submit|send    GET .../messages/:id/receipts    GET/POST .../effectiveness
+```
+### Core Logic
+1. Business model adopt tabhi ho sakta hai jab approvals complete aur integration points ke owners ne sign-off kiya ho. Adoption `effective_from` se (effective-dated), purana model retire/update.
+2. Integration conflict (shared resource, cannibalization) quantified aur Module 6 targets ko adjust karne ka suggestion.
+3. Maintenance triggers auto: KPI breach ya assumption invalid hone par `bm_feedback` auto-create.
+4. Feedback priority score = impact x urgency, accepted feedback se update version, purana version history mein.
+5. Governance: periodic attestation due date par owner ko reminder, miss hone par council ko escalation.
+6. Communication: restricted/MNPI content disclosure review (legal/IR) ke bina send nahi, quiet period mein external messages block.
+7. Strategy/vision/mission versions publish hone par comm plan auto-suggest, audience segments HR/CRM se dynamic.
+8. Read/acknowledge tracking aur non-acknowledgers ko reminders, aur understanding survey effectiveness metrics mein.
+9. Multi-language messages `translations` se, country-specific legal edits ke saath.
+10. `audit_log` har action pe.
+
+---
+
+# COVERAGE MATRIX (APQC 1.0 to tab)
+
+| APQC code(s) | Covered in |
+|---|---|
+| 1.1.1.1, 1.1.1.2 | M1 T1 Competitive Intelligence |
+| 1.1.1.3, 1.1.1.8 | M1 T2 Alternatives & Technology |
+| 1.1.1.4 to 1.1.1.7, 1.1.1.9 | M1 T3 Macro Environment |
+| 1.1.1.10 | M1 T4 IP Landscape |
+| 1.1.2.1, 1.1.2.2 | M2 T1 Research & Needs Capture |
+| 1.1.2.3 | M2 T2 Needs Assessment |
+| 1.1.3.1 to 1.1.3.3 | M2 T3 Organization, Operations & Process Baselines |
+| 1.1.3.4 to 1.1.3.6 | M2 T4 Systems, Financial Health & Core Competencies |
+| 1.1.4.1, 1.1.4.2 | M3 T1 Strategic Vision & Alignment |
+| 1.1.4.3 | M9 T3 Strategy Communication |
+| 1.1.5.1, 1.1.5.2 | M3 T3 Restructuring Opportunities & Due Diligence |
+| 1.1.5.3, 1.1.5.3.1 to 1.1.5.3.4 | M3 T4 Deal Options |
+| 1.2.1.1, 1.2.1.2 | M3 T2 Mission |
+| 1.2.1.3 | M9 T3 Strategy Communication |
+| 1.2.2.1, 1.2.2.1.1, 1.2.2.2, 1.2.2.2.1, 1.2.2.2.2 | M4 T1 Define & Assess Options |
+| 1.2.2.3 to 1.2.2.5 | M4 T2 Market & Channel Options |
+| 1.2.2.6 to 1.2.2.11 | M4 T3 Capability Options |
+| 1.2.3.1 to 1.2.3.7 | M4 T4 Long-Term Enterprise Strategy |
+| 1.2.4 | M4 T5 Cross-Functional Alignment |
+| 1.2.5.1, 1.2.5.2 | M5 T1 Structure & Role Mapping |
+| 1.2.5.3, 1.2.5.6 | M5 T2 Role Activity Diagrams |
+| 1.2.5.4, 1.2.5.5 | M5 T3 Redesign Workshops & Unit Relationships |
+| 1.2.5.7, 1.2.5.8 | M5 T4 Alternatives Assessment & Migration |
+| 1.2.6.1, 1.2.6.2 | M6 T1 Objectives & Baselines |
+| 1.2.6.3 | M6 T2 Performance Monitoring |
+| 1.2.7.1 to 1.2.7.3 | M6 T3 Business Unit Strategies |
+| 1.2.8.1, 1.2.8.1.1 to 1.2.8.1.3 | M7 T1 CX Assessment |
+| 1.2.8.2.1, 1.2.8.2.2 | M7 T2 Personas & Journey Maps |
+| 1.2.8.2.3 | M7 T3 Single View of Customer |
+| 1.2.8.2.4 to 1.2.8.2.7 | M7 T4 CX Vision, Validation, Brand & Content |
+| 1.2.8.3, 1.2.8.3.1, 1.2.8.3.2, 1.2.8.4 | M7 T5 Support Structure & Roadmap |
+| 1.2.9 | M9 T3 Strategy Communication |
+| 1.3.1.1 to 1.3.1.3 | M8 T1 Develop Initiatives |
+| 1.3.2.1, 1.3.2.2 | M8 T2 Evaluate Initiatives |
+| 1.3.3.1, 1.3.3.2 | M8 T3 Select, Prioritize & Communicate |
+| 1.3.4.1 to 1.3.4.3 | M8 T4 High-Level Measures |
+| 1.3.5, 1.3.6, 1.3.7 | M8 T5 Execute, Review & Refine |
+| 1.4.1.1 to 1.4.1.4 | M9 T1 Develop & Adopt Business Models |
+| 1.4.2.1 to 1.4.2.4, 1.4.3 | M9 T2 Maintain & Govern Business Models |
+
+**Count check:** M1 = 4, M2 = 4, M3 = 4, M4 = 5, M5 = 4, M6 = 3, M7 = 5, M8 = 5, M9 = 3. Total **9 screens, 37 tabs**, aur APQC 1.0 ke saare process codes (1.1.1.1 se 1.4.3 tak) kisi na kisi tab mein mapped hain.
+
+Ye 1.0 aur pichla 2.0 guide ek hi `strategy_nodes` aur Stage-Gate/Change engines share karte hain, to agla step in dono ka integration map banana ho sakta hai. Bolna agar wo chahiye.
