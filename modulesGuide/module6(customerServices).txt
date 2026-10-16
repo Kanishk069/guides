@@ -1,0 +1,1009 @@
+Pehle web pe research karta hu (enterprise service platforms, WFM, warranty, field service, recall regulations), phir poori guide ek piece mein chat mein dunga.
+
+Core research ho gayi. Ab regulatory timelines aur compliance details verify karta hu taaki guide mein sahi numbers jaye.
+
+# 6.0 MANAGE CUSTOMER SERVICE: ENTERPRISE GUIDE
+
+**Scope:** 12 screens, 50 tabs. Chart ke har node (6.1.1 se 6.5.5) ka code har tab ke saath likha hai, taaki tum khud verify kar sako.
+
+---
+
+# COMMON FOUNDATION (sab modules pe lagu)
+
+**Common rules:** API prefix `/api/cs/...`. Har create/edit/action `audit_log` mein jayega. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath hoga (delete nahi, disable). Har table mein `tenant_id` aur `entity_id` (multi-company, multi-brand) hoga. SLA, policy, timeline, threshold, regulatory clock aur reason code **config tables** mein rahenge, hardcode nahi.
+
+**Shared tables:**
+```
+audit_log (id, tenant_id, table_name, record_id, action, changed_by, changed_at, old_value, new_value, ip, channel)
+approval_workflows (id, module, condition_json, steps_json[role/user, order, sla_hours], status)
+approval_requests (id, module, record_id, requested_by, current_step, status[pending/approved/rejected/withdrawn], created_at)
+approval_actions (id, request_id, step, actor_id, action, remarks, acted_at)
+notifications (id, recipient_type[customer/agent/supplier/regulator], recipient_id, type, ref_module, ref_id, message, channel[in_app/email/sms/whatsapp/push/voice], template_id, language_code, sent_at, delivered_at, read_at)
+documents (id, owner_type, owner_id, doc_type, file_url, version, uploaded_by, uploaded_at, is_confidential, retention_until)
+comments (id, ref_module, ref_id, user_id, text, is_internal, created_at)
+custom_fields (id, module, field_name, field_type, options_json, is_required)
+custom_objects (id, module, object_name, schema_json) / custom_object_records (id, object_id, ref_id, data_json)
+users (id, name, email, role_id, team_id, skills_json, languages_json, status)
+teams (id, name, parent_id, type[tier0/tier1/tier2/tier3/field/back_office/quality], lead_id)
+roles / permissions (id, role, module, action, scope_json)   -- field-level aur row-level access
+```
+
+**Customer & product foundation:**
+```
+customers (id, customer_no, type[individual/business/government], name, segment_id, tier[standard/premium/vip/strategic], language, country_id, status, parent_customer_id, owner_id)
+contacts (id, customer_id, name, phone, email, social_handles_json, preferred_channel, preferred_language, is_primary, status)
+customer_identities (id, customer_id, id_type[email/phone/social/loyalty/device], value, verified, merged_into_id)   -- identity resolution, duplicate merge
+customer_consents (id, customer_id, purpose[service/marketing/recording/profiling], channel, status[granted/withdrawn], source, captured_at, evidence_ref, expires_at)
+customer_segments (id, name, rule_json, priority, status)
+products (id, sku, name, category_id, brand, model, lifecycle_status, warranty_policy_id, is_serialized, bom_ref)
+product_catalog_hierarchy (id, product_id, parent_id, level)
+assets (id, serial_no, product_id, customer_id, purchase_date, purchase_channel, dealer_id, install_date, location_json, status[active/transferred/scrapped/recalled], batch_lot_id)
+batches_lots (id, product_id, lot_no, manufactured_on, plant_id, supplier_lot_json)
+suppliers (id, name, country, contact, status) / dealers_partners (id, name, type[dealer/retailer/service_partner/distributor], region, status)
+interactions (id, customer_id, contact_id, channel_id, direction[in/out], started_at, ended_at, agent_id, transcript_ref, recording_ref, sentiment, language, case_id, ref_session_id)
+channels (id, name, type[voice/email/chat/whatsapp/sms/social/web_form/app/video/walk_in/ivr/bot/api], status)
+```
+
+**Enterprise foundation (global scale):**
+```
+legal_entities / brands / business_units (id, name, country, base_currency, status)
+countries / country_config (id, country_id, module, config_json, effective_from)   -- local law, SLA, recording consent, data residency, working hours
+currencies / exchange_rates (id, from_ccy, to_ccy, rate, rate_type, effective_date)
+translations (id, ref_table, ref_id, field, language_code, text)   -- templates, KB, forms, surveys multi-language
+holiday_calendars / business_hours (id, entity_id, country_id, calendar_json)   -- SLA clock business hours ke hisaab se
+reason_codes (id, type[contact/complaint/return/warranty/rejection/closure/escalation], code, label, status)
+business_rules (id, module, rule_json, priority, effective_from, status)   -- no-code rules engine
+regulatory_clock_rules (id, regime, event_type, trigger, deadline_value, deadline_unit[hours/calendar_days/working_days], country_id, effective_from)   -- regulator ke timelines config se
+data_retention_policies (id, data_type, retention_days, legal_basis, country_id, action[delete/anonymize/archive])
+data_subject_requests (id, customer_id, type[access/erasure/correction/portability], received_at, due_at, status)
+feature_flags / api_keys / webhooks (id, tenant_id, event, target_url, secret_ref, status)
+```
+
+**Common rules (platform level):**
+- **Unified customer timeline:** har channel ki interaction, case, order, warranty, service, complaint ek customer record pe dikhta hai. Reports FCR ko channel-wise nahi, customer-level pe naapte hain.
+- **Omnichannel routing engine:** skill + capacity + priority + SLA + customer tier + language, ye sab routing ke inputs hain.
+- **SLA engine:** timers business hours/holiday calendar ke hisaab se chalte hain. Pause/resume (customer reply pending), breach warning aur auto-escalation.
+- **Entitlement engine:** customer ya asset ko kya support milega (contract, warranty, tier, prepaid hours) wo har case pe auto-check hota hai.
+- **Approval Engine:** parallel steps, conditional steps, send-back, delegation, escalation on SLA breach, fallback approver.
+- **Consent & privacy:** recording, marketing aur profiling ke liye alag consent. Country rule se recording prompt aur PCI redaction auto-apply hota hai. Right-to-erasure se customer data anonymize hota hai, par regulatory file hold rehti hai.
+- **AI layer (har module mein):** agent assist, case summary, sentiment, auto-classification, auto-QA, suggested reply. Har AI output "suggested" rehta hai aur human override logged hota hai.
+- **Multi-country / multi-language / multi-currency:** local law, local SLA, local template.
+- **Event bus:** har state change ek event hai (`case.created`, `claim.approved`, `recall.initiated`), jisse integrations aur analytics chalte hain.
+
+**Dependencies (naam se):** CRM, ERP (orders, inventory, finance), PLM/Quality (CAPA), Supplier Portal, Telephony/CCaaS, Payment Gateway, Logistics/Reverse Logistics, Marketing, Sales/Opportunity, HR (agent master), Data Warehouse/Analytics, Identity.
+
+---
+
+# PART 1: STRATEGY (6.1)
+
+## SCREEN 1: Service Strategy (6 tabs)
+
+**Tab 1. Enterprise Service Requirements** (6.1.1)
+- Requirement register: business unit, product line, region, requirement, source (Customer/Regulatory/Business/Contract), priority, owner, status
+- Impact/effort scoring, requirement-to-capability mapping (kaun si screen/feature isko cover karti hai)
+- BU intake form: har BU apni service needs submit kare, aur central team consolidate kare
+- Regulatory requirement tagging (country wise, jaise product safety, consumer law, data privacy)
+
+**Tab 2. Service Experience Design** (6.1.2)
+- Journey map: stages (Discover Issue, Contact, Triage, Resolve, Follow-up, Feedback) x touchpoint, pain point, target effort score, owner
+- Personas/segments, "moments that matter" flag, service promise/principles
+- Target CES/CSAT/FCR per journey stage, aur actual score auto-link (Screen 11 se)
+- Tone-of-voice guide aur brand standards per channel/language
+
+**Tab 3. Channel Strategy** (6.1.3)
+- Channel catalogue: channel, purpose, supported case types, hours, languages, cost per contact, containment target, status
+- Channel-by-segment/issue-type matrix (kaun sa issue kis channel pe handle hoga), self-service/bot containment targets
+- Channel migration plan (voice to digital shift), proactive/outbound channels
+- Channel capacity and cost model, per-contact cost compare (bot vs agent vs field)
+
+**Tab 4. Service Policies and Procedures** (6.1.4)
+- Policy library: contact handling, refund/return, goodwill limits, escalation, data privacy, call recording, vulnerable customers, with version, owner, effective date, country variant
+- SOP builder (step-by-step, linked KB article), approval and publishing workflow, version diff
+- Agent acknowledgement tracker, review-due reminder
+- Authority matrix (agent kitne value tak refund/credit/goodwill de sakta hai, uske baad approval)
+
+**Tab 5. Service Levels by Segment** (6.1.5)
+- SLA matrix: segment x tier x channel x priority, first-response time, resolution time, update frequency, business-hours calendar
+- Service tiers/entitlement plans (Standard/Premium/VIP/Contracted), prepaid-hours aur support plans
+- OLA (internal team targets) aur UC (supplier/partner underpinning contracts)
+- Threshold config (green/amber/red limits), SLA what-if simulator (target badla to staffing/cost par asar)
+
+**Tab 6. Strategy Integrations** (6.1.6)
+- System inventory: CRM, ERP, telephony, payment, logistics, quality/PLM, marketing, sales, supplier portal, with owner, status, SLA
+- Integration map (kaun data kisko deta hai), API/webhook config, data-contract definitions, health monitor, failure retry log
+- Master-data ownership (kaun sa system customer/product/asset ka source of truth hai)
+- Contract end/renewal reminder, license vs usage, TCO
+
+### Tables
+```
+cs_requirements (id, title, source, bu_id, region, priority, impact_score, effort_score, mapped_capability, owner_id, status)
+cs_journey_stages (id, stage, touchpoint, pain_point, target_ces, actual_ces, persona_id, is_moment_that_matters, owner_id)
+cs_personas (id, name, definition_json)
+cs_channel_strategy (id, channel_id, purpose, case_types_json, hours_json, languages_json, cost_per_contact, containment_target_pct, status, effective_from)
+cs_channel_routing_matrix (id, segment_id, issue_type_id, channel_id, priority, fallback_channel_id)
+cs_policies (id, name, category, owner_id, applicable_json, country_id, review_due_date, status[draft/in_review/approved/published/retired], parent_policy_id)
+cs_policy_versions (id, policy_id, version_no, content, change_summary, effective_from, approved_by, document_id)
+cs_policy_acks (id, policy_version_id, user_id, acknowledged_at, quiz_score)
+cs_sops (id, name, steps_json, kb_article_id, version, status)
+cs_authority_matrix (id, role_id, action[refund/credit/goodwill/replace/waive_fee], limit_amount, currency, approval_workflow_id)
+sla_policies (id, name, segment_id, tier, channel_id, priority, first_response_mins, resolution_mins, update_interval_mins, calendar_id, effective_from, status)
+service_plans (id, name, tier, included_json, prepaid_hours, price, currency, status)
+ola_targets (id, team_id, metric, target, effective_from)
+cs_thresholds (id, metric, green_min_pct, amber_min_pct, effective_from)
+cs_integrations (id, system_name, category, owner_id, status, sla_json, data_contract_json, contract_end, annual_cost)
+cs_integration_logs (id, integration_id, event, status, error, retry_count, at)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/strategy/requirements
+GET/POST/PUT /api/cs/strategy/journey      GET/POST/PUT .../personas
+GET/POST/PUT /api/cs/strategy/channels     GET/PUT .../channel-routing-matrix
+GET/POST/PUT /api/cs/strategy/policies     POST .../policies/:id/submit    PUT .../policies/:id/publish    GET .../versions/diff?a=X&b=Y
+GET/POST/PUT /api/cs/strategy/sops
+GET/PUT /api/cs/strategy/authority-matrix
+GET/POST/PUT /api/cs/strategy/sla-policies     POST .../sla-policies/simulate
+GET/POST/PUT /api/cs/strategy/service-plans
+GET/POST/PUT /api/cs/strategy/integrations     GET .../integrations/:id/health
+```
+
+### Core Logic
+1. Har requirement kisi capability se map hoti hai. Unmapped requirement "gap" ke roop mein dikhti hai.
+2. Policy publish ke baad immutable hai, edit par naya version. Applicable agents ko acknowledgement request jati hai.
+3. Authority matrix case/claim/return module mein enforce hoti hai: limit se upar approval workflow trigger.
+4. SLA policy ki priority: contract SLA > service plan SLA > segment SLA > default.
+5. Channel routing matrix omnichannel router ko feed karta hai.
+6. Integration health fail hone par fallback (queue and retry) aur admin alert.
+7. Country-specific policy variant employee/customer ki country se auto-select.
+8. `audit_log` har action pe.
+
+---
+
+# PART 2: PLAN AND MANAGE CONTACTS (6.2)
+
+## SCREEN 2: Workforce Management (4 tabs)
+
+**Tab 1. Contact Volume Forecasting** (6.2.1.1)
+- Forecast grid: channel x queue x interval (15/30 min, daily, weekly, monthly), volume, AHT, forecast accuracy (WAPE/MAPE)
+- Model selector (ML time-series with seasonality, Erlang baseline, manual override), event calendar (campaign, launch, recall, holiday, outage) ka impact
+- Long-range forecast (annual hiring plan), short-range intraday re-forecast
+- Backlog/deferred-channel modelling (email, social ke liye alag math, kyunki voice wala Erlang unpe fit nahi hota)
+
+**Tab 2. Workforce Scheduling** (6.2.1.2)
+- Required staff calculation (service level target, shrinkage, occupancy cap), shift templates, rotating rosters, skill-based scheduling
+- Schedule generation (auto-optimize), manual edit, publish, shift bidding/swap/time-off request approvals, break/lunch optimization
+- Multi-site, multi-timezone, follow-the-sun, outsourced/BPO vendor capacity lines alag
+- Labor-law rules config (max hours, rest period, night shift, overtime) country wise
+- Scenario compare (headcount vs service level vs cost)
+
+**Tab 3. Workforce Utilization** (6.2.1.3)
+- Real-time adherence (agent state vs schedule), occupancy, utilization, shrinkage (planned/unplanned), AHT, concurrency (chat)
+- Intraday management: interval variance, reforecast, suggested actions (overtime call, VTO, skill reroute, break shift)
+- Agent/team/site drill-down, exceptions list (out-of-adherence), capacity vs demand heatmap
+- Cost view: cost per contact, overtime spend, BPO utilization
+
+**Tab 4. Interaction Quality Monitoring** (6.2.1.4)
+- Scorecard builder (weighted criteria, auto-fail items, compliance questions), evaluation form per channel
+- Auto-QA: 100% interactions ka AI scoring (sentiment, silence, script/compliance adherence, empathy), manual evaluation sampling rule, calibration sessions
+- Evaluation list: agent, interaction, score, evaluator, dispute/appeal, coaching assigned
+- Coaching tracker (behavior, action, due date, follow-up), agent scorecard, leaderboard (config)
+- Compliance alerts (mandatory disclosure missed, PCI breach, vulnerable-customer handling)
+
+### Tables
+```
+wfm_forecast_runs (id, queue_id, channel_id, granularity, horizon, model[ml/erlang/manual], params_json, run_by, run_at)
+wfm_forecasts (id, run_id, queue_id, interval_start, volume, aht_secs, confidence_low, confidence_high)
+wfm_forecast_accuracy (id, queue_id, period, wape, bias)
+wfm_events (id, name, type[campaign/launch/recall/holiday/outage], from_date, to_date, uplift_pct, scope_json)
+wfm_requirements (id, queue_id, interval_start, required_fte, service_level_target, shrinkage_pct, occupancy_cap_pct)
+wfm_shift_templates (id, name, start_time, end_time, breaks_json, skills_json, country_id)
+wfm_schedules (id, agent_id, date, shift_template_id, activities_json[work/break/training/coaching/offline], status[draft/published], version)
+wfm_schedule_requests (id, agent_id, type[swap/time_off/bid/overtime], details_json, approval_request_id, status)
+wfm_labor_rules (id, country_id, rule_json, effective_from)
+wfm_adherence (id, agent_id, interval_start, scheduled_state, actual_state, adherent_secs, out_secs)
+wfm_utilization_daily (id, agent_id, date, occupancy_pct, utilization_pct, shrinkage_planned_pct, shrinkage_unplanned_pct, handled, aht)
+wfm_intraday_actions (id, queue_id, at, variance_pct, action_type, status)
+wfm_vendor_capacity (id, vendor_id, queue_id, period, committed_fte, actual_fte, cost, currency)
+qa_scorecards (id, name, channel_type, criteria_json, weights_json, auto_fail_json, version, status)
+qa_evaluations (id, interaction_id, agent_id, scorecard_id, evaluator_id/auto, score, auto_fail, comments, status, evaluated_at)
+qa_disputes (id, evaluation_id, reason, decision, decided_by)
+qa_calibrations (id, scorecard_id, date, participants_json, variance_json)
+qa_sampling_rules (id, queue_id, agent_tenure_band, pct, rule_json)
+coaching_plans (id, agent_id, evaluation_id, behavior, action, due_date, status, outcome)
+```
+
+### APIs
+```
+POST /api/cs/wfm/forecast/run    GET .../forecast?queue=X&from=A&to=B    POST .../forecast/:id/override
+GET/POST/PUT /api/cs/wfm/events
+GET /api/cs/wfm/requirements     POST .../schedules/generate    GET/PUT .../schedules    POST .../schedules/publish
+GET/POST .../schedule-requests    PUT .../schedule-requests/:id/decision
+GET /api/cs/wfm/adherence/live   GET .../utilization    GET .../intraday    POST .../intraday/actions
+GET/POST/PUT /api/cs/quality/scorecards
+GET/POST /api/cs/quality/evaluations    POST .../evaluations/auto-score    POST .../evaluations/:id/dispute
+GET/POST /api/cs/quality/calibrations    GET/POST/PUT .../coaching
+```
+
+### Core Logic
+1. Required FTE = workload / (occupancy cap) with shrinkage uplift. Industry mein shrinkage kareeb 30-35% maani jati hai, isliye isko hamesha alag config se add karo, kabhi ignore mat karo. Default value tenant/site wise config.
+2. Erlang C ek baseline hai. Ye 1917 mein phone trunks ke liye bana tha, isliye predictable patterns par 8-15% overstaff aur peaks par understaff kar sakta hai. Isliye default model ML forecast rakho, Erlang sirf fallback/benchmark, aur accuracy (WAPE) har run ke baad store karo.
+3. Voice, chat aur email ke liye alag staffing math (chat mein concurrency, email/social mein backlog-based).
+4. Schedule publish hone par agents ko notification, aur Labor rule violation par publish block.
+5. Real-time adherence agent state (telephony event) vs schedule se calc. Threshold breach par supervisor alert.
+6. Intraday: actual volume forecast se config % se zyada hile to reforecast, aur suggested actions (overtime/VTO/skill reroute).
+7. Manual QA mein aksar 1% se kam volume evaluate hota hai, isliye auto-QA 100% interactions score kare aur human review sirf low-score, dispute, compliance-fail aur calibration sample par ho.
+8. Auto-fail item (jaise recording disclosure miss, card number read-back) score ko override karke compliance alert banata hai.
+9. Auto-QA score hamesha "suggested" rehta hai. Agent dispute kar sakta hai, aur human decision final.
+10. Coaching plan low-scoring behavior se auto-suggest hota hai aur follow-up evaluation se improvement measure hota hai.
+11. `audit_log` har action pe.
+
+---
+
+## SCREEN 3: Case & Inquiry Management (6 tabs)
+
+**Tab 1. Receive Contacts** (6.2.2.1)
+- Unified agent workspace: inbox/queue of all channels, customer 360 panel (timeline, assets, entitlements, open cases, sentiment, consent flags)
+- Intake: voice (IVR, callback), email parsing, chat/bot handoff, WhatsApp/SMS/social, web form, app, video, walk-in, API
+- Identity resolution and verification (OTP/KBA), duplicate contact merge, spam filter, language detection
+- Case create form: customer, asset/serial, issue type, channel, priority, attachments
+- Call recording consent prompt aur PCI pause/redaction control
+
+**Tab 2. Analyze and Triage** (6.2.2.2)
+- Auto-classification (type, product, severity, intent, sentiment), duplicate/related case detection, repeat contact flag
+- Entitlement check (kya customer eligible hai), SLA clock start, priority scoring (tier + severity + sentiment + SLA risk)
+- Routing rules: skill, language, tier, queue, capacity; swarm/collaboration for complex issues
+- Safety keyword detection (injury, fire, overheating, adverse event) jo auto-escalate hoke Screen 5/10 ko signal bheje
+
+**Tab 3. Resolve** (6.2.2.3)
+- Guided troubleshooting (decision tree), knowledge base search, AI suggested solution, agent assist, similar solved cases
+- Actions: replace/refund/credit/repair/RMA/field visit/warranty claim/return create, linked from case
+- Escalation tiers (L1/L2/L3/engineering), internal tasks, collaboration, follow-the-sun handoff
+- Pending-customer and pending-third-party states (SLA pause), bulk/mass-incident link (ek outage, many cases)
+- Known-issue/problem record linking, root-cause tag
+
+**Tab 4. Respond** (6.2.2.4)
+- Reply composer: templates, macros, multi-language, tone check, attachments, AI draft, spell/compliance check
+- Outbound proactive updates (status, ETA), customer self-service portal view (case status, track repair)
+- Response approval for sensitive cases, CC/BCC, thread merge
+- Closure: reason code, resolution summary, survey trigger, reopen window rule
+
+**Tab 5. Upsell / Cross-sell Capture** (6.2.2.5)
+- Opportunity suggestions during case (next-best-offer based on asset, warranty expiry, usage, tier)
+- Agent "capture opportunity" form: product/service, interest level, customer consent for contact, notes
+- Rules: no offers on open complaint/angry-sentiment cases (config), consent check before marketing contact
+- Opportunity pipeline view and conversion tracking
+
+**Tab 6. Deliver to Sales** (6.2.2.6)
+- Hand-off queue: opportunity, customer, context, owner, status (Captured, Sent, Accepted, Contacted, Won, Lost, Rejected)
+- Auto-push to CRM/Sales as lead/opportunity with case context, SLA for sales follow-up, feedback loop (won/lost reason back to service)
+- Attribution: service-sourced revenue, agent incentive link (config)
+
+### Tables
+```
+cases (id, case_no, customer_id, contact_id, asset_id, product_id, channel_id, type_id, subtype_id, priority, severity, status[new/open/pending_customer/pending_third_party/escalated/resolved/closed/reopened], owner_id, queue_id, entitlement_id, sla_policy_id, created_at, first_response_at, resolved_at, closed_at, resolution_code_id, parent_case_id, problem_id, language, sentiment, is_safety_flag, is_repeat, source_interaction_id)
+case_types (id, name, parent_id, default_queue_id, default_sla_id, requires_serial, safety_review_required, status)
+case_sla_timers (id, case_id, sla_type[first_response/resolution/update], started_at, paused_at, resumed_at, due_at, breached_at, status)
+case_activities (id, case_id, type[note/email/call/task/status_change/escalation], user_id, content, at)
+case_links (id, case_id, linked_type[warranty_claim/return/service_order/complaint/problem/opportunity], linked_id)
+case_tasks (id, case_id, assignee_id, title, due_date, status)
+case_assignments (id, case_id, from_id, to_id, reason, at)
+entitlements (id, customer_id/asset_id, type[warranty/contract/plan/prepaid], terms_json, start_date, end_date, remaining_units, status)
+routing_rules (id, name, condition_json, target_queue_id, skills_json, priority, effective_from)
+queues (id, name, team_id, channels_json, skills_json, capacity_rules_json, status)
+agent_presence (id, agent_id, state[available/busy/break/offline], channel_capacity_json, updated_at)
+kb_articles (id, title, body, category_id, product_ids_json, version, status, language_code, owner_id, review_due, usefulness_score)
+kb_usage (id, article_id, case_id, agent_id, action[viewed/attached/helpful/not_helpful], at)
+troubleshooting_flows (id, name, product_id, flow_json, version, status)
+response_templates (id, name, channel_type, language_code, body, variables_json, approval_required, status)
+problems (id, title, root_cause, status, affected_products_json, linked_case_count, owner_id)   -- known-issue / problem management
+major_incidents (id, title, scope_json, started_at, resolved_at, comms_plan_json, status)
+service_opportunities (id, case_id, customer_id, opportunity_type[upsell/cross_sell/renewal/extended_warranty], product_id, interest_level, consent_ok, notes, captured_by, status[captured/sent/accepted/contacted/won/lost/rejected], crm_ref, value, currency, loss_reason)
+case_closure_reasons (id, reason_code_id, requires_survey, reopen_window_days)
+```
+
+### APIs
+```
+POST /api/cs/intake/:channel     (email/chat/voice/web/social/api, webhook-driven)
+POST /api/cs/identity/resolve    POST .../identity/verify    POST .../identity/merge
+GET/POST/PUT /api/cs/cases       GET .../cases/:id/timeline    POST .../cases/:id/classify    POST .../cases/:id/route
+POST .../cases/:id/resolve|close|reopen|escalate|link    GET .../cases/:id/entitlement-check
+GET/POST .../cases/:id/activities    POST .../cases/:id/reply    POST .../cases/:id/assist
+GET/POST/PUT /api/cs/knowledge/articles    GET .../knowledge/search?q=X    POST .../articles/:id/feedback
+GET/POST/PUT /api/cs/troubleshooting
+GET/POST/PUT /api/cs/problems    GET/POST/PUT .../major-incidents
+GET/POST/PUT /api/cs/opportunities    POST .../opportunities/:id/send-to-sales    PUT .../opportunities/:id/outcome
+GET/POST/PUT /api/cs/routing-rules    GET/PUT .../queues
+```
+
+### Core Logic
+1. Omnichannel basics jo har enterprise platform mein non-negotiable maane jate hain: ek unified customer timeline, shared queue jo sab channels ko route kare, maintained knowledge base, channel-wise SLA tracking, aur FCR ko customer level pe measure karna. Ye saari cheezein is screen ki foundation hain.
+2. Case create hote hi identity resolution chalta hai. Match nahi mila to naya customer (duplicate detection ke saath), match mila to timeline attach.
+3. Entitlement check: entitlement define karta hai ki customer ko contract, prepaid hours ya tier ke hisaab se kis level ka support milega. Case ka SLA entitlement se aata hai, aur out-of-entitlement par paid service/quote ka option.
+4. SLA timer business hours calendar se chalta hai. "Pending customer" par pause, customer reply par auto-resume. Breach se pehle warning (config %), breach par escalation.
+5. Priority score = tier weight + severity + sentiment + SLA risk + repeat-contact flag. Routing rule skill, language aur capacity dekh ke queue/agent chunta hai.
+6. Safety keyword ya `is_safety_flag` par case ko "Safety Review" queue mein route, aur Screen 5 Tab 3 (incident reporting) ka reportability check auto-trigger.
+7. Same product/lot/issue ke cases threshold cross karein to `problems` record ya `major_incidents` auto-suggest hota hai, aur naye related cases usi se link.
+8. Resolution action (refund/replace/RMA/warranty/field visit) apni module ko call karta hai, aur case us record se link rehta hai.
+9. Closure ke baad survey trigger (Screen 11). Reopen window ke andar customer reply par case reopen.
+10. Authority matrix (Screen 1 Tab 4): limit se upar refund/credit par approval workflow.
+11. Upsell: consent aur case-state rule (open complaint/negative sentiment par offer block) pass hone par hi opportunity capture, aur CRM mein push. Won/lost reason wapas aata hai.
+12. Voice recording: customer ki country ke consent rule se recording prompt auto-select hota hai. Disclosure prompt, valid consent aur sensitive data ki encryption/redaction teeno zaruri hote hain. GDPR ke tahat recording ke liye explicit consent ya legitimate interest chahiye, aur customer kabhi bhi consent wapas le sakta hai. Payment card data aaye to pause-and-resume ya post-call redaction.
+13. AI suggestions (classification, reply draft, summary) hamesha editable, aur agent action (accept/reject) learning ke liye log hota hai.
+14. `audit_log` har action pe.
+
+---
+
+## SCREEN 4: Complaint Management (5 tabs)
+
+**Tab 1. Receive Complaints** (6.2.3.1)
+- Complaint intake from every channel, plus regulator/ombudsman/consumer-forum/social-media/NPS-detractor sources
+- Complaint vs inquiry classification (config rules + AI), complaint category (product/service/billing/delivery/safety/conduct/privacy), severity, regulatory flag
+- Acknowledgement auto-send with complaint reference number aur expected timeline (country rule se)
+- Complainant details, vulnerable-customer flag, representative/authority letter, anonymous complaint
+
+**Tab 2. Route Complaints** (6.2.3.2)
+- Routing matrix: category x severity x region x product to owner/team (complaints cell, quality, legal, product safety, grievance officer)
+- Escalation levels (L1 to L2 to Ombudsman-level), conflict-of-interest rule (jis agent pe complaint hai wo handle na kare)
+- Regulatory complaint handling track (statutory clock auto-start)
+- Linked records: original case, order, warranty claim, service order, interaction recording
+
+**Tab 3. Resolve Complaints** (6.2.3.3)
+- Investigation workspace: facts, evidence (recording, photos, logs), root cause, responsible team input, product/batch trace
+- Resolution options: apology, replacement, refund, compensation, goodwill, service redo, policy exception (authority matrix)
+- CAPA trigger (corrective/preventive action) link to Quality system
+- Safety/adverse-event determination, reportability check (Screen 5 Tab 3)
+
+**Tab 4. Respond to Complainants** (6.2.3.4)
+- Formal response letter builder (template, language, legal review), response approval, delivery tracking
+- Customer acceptance/rejection capture, appeal/reopen, second-level review
+- Closure with reason, final-response letter, regulator response (if regulator-originated)
+
+**Tab 5. Complaint Analysis and Redressal Review** (6.2.3.5)
+- Complaint dashboard: volume, rate per 1,000 units/orders, category trend, age, SLA compliance, repeat complainants, reopen rate
+- Pareto by product/lot/supplier/channel/site/agent, root-cause trending, early-warning (spike detection)
+- Redressal effectiveness (customer accepted %, time-to-resolve, cost of redressal)
+- Systemic issue register, CAPA effectiveness, report pack for management/regulator
+
+### Tables
+```
+complaints (id, complaint_no, customer_id, case_id, source[customer/regulator/ombudsman/social/nps/internal], channel_id, category_id, severity, product_id, asset_id, lot_id, description, regulatory_flag, safety_flag, vulnerable_flag, is_anonymous, received_at, acknowledged_at, status[received/routed/investigating/resolved/responded/closed/appealed], owner_id, team_id, due_at, closed_at)
+complaint_categories (id, name, parent_id, default_team_id, regulatory_regime, status)
+complaint_routing_rules (id, condition_json, team_id, level, effective_from)
+complaint_investigations (id, complaint_id, findings, root_cause, responsible_party_type[internal/supplier/dealer/customer/logistics], product_trace_json, evidence_docs_json, investigator_id, completed_at)
+complaint_resolutions (id, complaint_id, resolution_type, amount, currency, approval_request_id, executed_at, linked_record_type, linked_record_id)
+complaint_responses (id, complaint_id, response_type[acknowledgement/interim/final/regulator], template_id, language_code, sent_at, delivery_status, approved_by)
+complaint_appeals (id, complaint_id, reason, level, decision, decided_by, decided_at)
+complaint_capa_links (id, complaint_id, capa_ref, status, effectiveness_checked_on)
+complaint_regulatory_tracks (id, complaint_id, regime, clock_rule_id, started_at, due_at, status)
+complaint_trends (id, period, dimension, dimension_id, count, rate_per_k, spike_flag)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/complaints    POST .../complaints/:id/acknowledge|route|investigate|resolve|respond|close|appeal
+GET/PUT /api/cs/complaints/:id/investigation    GET/POST .../complaints/:id/resolutions
+GET/POST .../complaints/:id/responses    POST .../complaints/:id/capa
+GET /api/cs/complaints/analytics    GET .../analytics/pareto?dim=product|lot|supplier|site    GET .../analytics/spikes
+GET/POST/PUT /api/cs/complaints/routing-rules    GET/POST/PUT .../categories
+```
+
+### Core Logic
+1. Complaint ki statutory clock country config se: e-commerce entity ke liye India mein grievance officer ko complaint 48 ghante mein acknowledge karni hoti hai aur ek mahine ke andar redress karni hoti hai. Ye `regulatory_clock_rules` mein seed hoga aur country/regime wise badlega, hardcode nahi.
+2. Standard framework: ISO 10002 complaint handling ka general framework deta hai, aur regulated products ke liye ISO 13485, EU MDR aur FDA 21 CFR 820 jaise rules complaint handling ko legal requirement banate hain. Is liye complaint file mein fixed minimum fields hain (intake, investigation, reportability decision, resolution, trend).
+3. Regulated products mein har complaint pe documented decision zaruri hai ki ye regulator ko report karna hai ya nahi (Screen 5 Tab 3). Decision blank hone par complaint close nahi hogi.
+4. Conflict-of-interest: complaint ka subject agent/team owner nahi ban sakta.
+5. Resolution amount authority matrix ke andar auto-approve, upar approval workflow.
+6. Complaint root cause "product/lot" nikle to lot trace aur Screen 10 (recall) ke hazard assessment ko signal. Supplier-responsible nikle to Screen 8 mein recovery suggestion.
+7. Spike detection: same category/lot/product mein rolling average se config threshold zyada complaints aane par alert, aur systemic issue register mein entry.
+8. Closure ke baad complainant ko feedback survey (Screen 11 Tab 2), aur reopen/appeal window.
+9. Data privacy: complaint evidence mein PII access role-restricted, aur retention policy se auto-archive.
+10. `audit_log` har action pe.
+
+---
+
+## SCREEN 5: Returns & Regulatory Reporting (3 tabs)
+
+**Tab 1. Authorize Return** (6.2.4.1)
+- Return request (RMA) form: order/asset, reason, condition, evidence photos, preferred resolution (refund/replace/repair/credit)
+- Eligibility check: return window, product category rules, condition, serial validation, abuse/serial-returner score
+- Authorization decision (auto/manual by authority matrix), RMA number, return label/pickup scheduling, return destination (warehouse/service center/supplier)
+- Fraud checks (serial reuse, return swaps, wardrobing patterns)
+
+**Tab 2. Process Return and Record Reason** (6.2.4.2)
+- Receiving and inspection (condition grading A/B/C/scrap), serial match, photo capture
+- Disposition: restock, refurbish, repair, return-to-vendor, liquidate, scrap, recycle (compliance for e-waste/batteries)
+- Refund/replacement/credit trigger to ERP/Finance, return reason capture (structured reason codes + free text)
+- Return analytics: return rate by product/lot/reason/channel/supplier, quality feedback to product team
+
+**Tab 3. Regulatory Incident and Risk Reporting** (6.2.5)
+- Incident intake from complaints/cases/field reports/social/retailers, with severity (death/serious injury/malfunction/property damage/near-miss)
+- Reportability assessment wizard (regime wise: US CPSC, FDA, EU GPSR/MDR, India and local regulators), decision log with rationale
+- Regulatory clock tracker (awareness date, due date, countdown), report builder (regulator-specific form), submission log, regulator correspondence
+- Risk register link, periodic/annual summary reports, trend reporting (serious-incident trend)
+
+### Tables
+```
+return_requests (id, rma_no, customer_id, case_id, order_ref, asset_id, product_id, qty, reason_code_id, condition_claimed, requested_resolution, status[requested/authorized/rejected/in_transit/received/inspected/dispositioned/closed], authorized_by, rejection_reason_id, window_check_json, fraud_score, created_at)
+return_policies (id, product_category_id, window_days, condition_rules_json, restocking_fee_pct, country_id, effective_from)
+return_shipments (id, rma_id, carrier, tracking_no, pickup_at, delivered_at, label_ref)
+return_inspections (id, rma_id, grade, serial_match, findings, photos_json, inspector_id, inspected_at)
+return_dispositions (id, rma_id, disposition[restock/refurbish/repair/rtv/liquidate/scrap/recycle], location_id, value_recovered, currency, executed_at)
+return_refunds (id, rma_id, refund_type, amount, currency, erp_ref, status)
+return_reasons_analytics (id, period, dimension, dimension_id, reason_code_id, count, rate_pct)
+safety_incidents (id, incident_no, source_type, source_ref, product_id, lot_id, asset_id, country_id, description, severity[death/serious_injury/injury/malfunction/property_damage/near_miss], injured_count, aware_at, status[open/assessed/reportable/not_reportable/reported/closed], owner_id)
+reportability_assessments (id, incident_id, regime, question_answers_json, decision[reportable/not_reportable/needs_review], rationale, decided_by, decided_at)
+regulatory_reports (id, incident_id, recall_id (nullable), regime, report_type[initial/followup/final/periodic/trend], form_data_json, due_at, submitted_at, submission_ref, status, regulator_ack_ref)
+regulator_correspondence (id, report_id, direction, subject, body, document_id, at)
+regulators (id, name, country_id, regime, portal_url, contact_json, status)
+risk_register (id, product_id, risk, likelihood, severity, mitigation, owner_id, review_date, status)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/returns    POST .../returns/:id/authorize|reject|receive|inspect|dispose|refund|close
+GET/PUT /api/cs/returns/policies    GET .../returns/analytics
+GET/POST/PUT /api/cs/regulatory/incidents    POST .../incidents/:id/assess
+GET/POST .../incidents/:id/assessments    GET/POST/PUT /api/cs/regulatory/reports    POST .../reports/:id/submit
+GET /api/cs/regulatory/clocks    GET/POST .../correspondence    GET/POST/PUT .../regulators    GET/POST/PUT .../risk-register
+```
+
+### Core Logic
+1. Return eligibility: window + category rule + condition + serial validation, sab config. Fail hone par reject with reason, ya exception approval.
+2. Serial/customer-level abuse score (bar-bar returns, same serial dobara) high ho to manual review.
+3. Receiving par serial match fail ho (return swap) to quarantine, fraud case aur refund hold.
+4. Disposition value recovery calc hota hai, aur refund sirf inspection pass ke baad (ya policy se advance refund, config).
+5. Return reason ka structured data Screen 11 Tab 3 aur product team ko jata hai. Ek lot/model mein reason cluster bane to quality alert.
+6. **Regulatory clocks (config-driven, seeded):**
+   - US consumer products (CPSC Section 15(b)): firms ko "immediately" yani 24 ghante ke andar report karna hota hai jab tak reasonably supporting information mile.
+   - US medical devices (FDA MDR 21 CFR 803): awareness ke 30 calendar days ke andar, aur remedial action ya FDA ke request par 5 work days. Dhyan rahe ki 30 din calendar days hain aur 5 din work days, aur unit galat karna aam galti hai.
+   - US device corrections/removals (21 CFR 806): recall shuru karne ke 10 working days ke andar report.
+   - EU medical devices (MDR Art. 87): public health threat par 2 din, death ya unanticipated serious deterioration par 10 din, baaki serious incidents par 15 din.
+   - EU consumer products (GPSR): accident hone par manufacturer ko turant Safety Business Gateway se member state authority ko notify karna hota hai. Importer/distributor manufacturer ko inform karte hain.
+   - India e-commerce complaint timelines: Screen 4 Logic 1.
+   Ye sab tables `regulatory_clock_rules` mein jayenge, lawyer/regulatory affairs se review ke baad hi production mein, aur country-wise override ho sakta hai. Regulations badalte rehte hain, isliye ye "defaults" hain, final nahi.
+7. "Awareness date" system define karta hai (jab company ke kisi bhi employee ko reportable info mili). Isliye safety-keyword ya complaint intake par `aware_at` turant stamp hota hai, aur clock wahi se chalta hai.
+8. Deadline se pehle countdown alert (config % ya hours), aur miss hone ka risk dikhe to Compliance head ko escalation.
+9. Report mein multiple regimes ek incident par lag sakte hain (jaise ek hi device event pe FDA aur EU dono), aur system har regime ka alag report/clock banata hai.
+10. Regulator ko submitted data ka snapshot immutable, aur follow-up report naya version.
+11. `audit_log` har action pe, aur regulatory records ki retention legal minimum ke saath alag policy.
+
+---
+
+# PART 3: SERVICE PRODUCTS AFTER SALES (6.3)
+
+## SCREEN 6: Product Registration (3 tabs)
+
+**Tab 1. Register Products** (6.3.1)
+- Registration channels: web/app/QR/serial scan, dealer-assisted registration, bulk import from sales/ERP, auto-registration from order data
+- Fields: customer, product, serial, purchase date, purchase proof, dealer/retailer, installation details, consent
+- Validation: serial exists in production records, not already registered, purchase date sane, grey-market/region check
+- Registration list, status (Pending/Verified/Rejected/Flagged), duplicate handling
+
+**Tab 2. Installed Base and Ownership** (supports 6.3.1)
+- Asset 360: product, serial, lot/batch, owner history, warranty status, service history, open cases, recall status, parts replaced
+- Ownership transfer (secondhand sale/gift) with new-owner verification, product relocation, decommission/scrap
+- Bulk asset import, B2B assets (fleet, site-wise hierarchy, parent-child assemblies)
+
+**Tab 3. Warranty Terms and Coverage Master** (supports 6.3.1 and 6.3.2)
+- Warranty policy master: product x country x coverage (parts/labor/onsite), duration, start trigger (purchase/installation/registration), exclusions, usage limits (km/hours/cycles)
+- Extended warranty and service-contract plans, transferability rules, registration-required-or-not rule
+- Coverage calculator, claim limits, deductible/co-pay, accrual rate for finance
+
+### Tables
+```
+product_registrations (id, customer_id, asset_id, serial_no, product_id, purchase_date, purchase_channel, dealer_id, proof_doc_id, install_date, source[web/app/qr/dealer/bulk/auto], status[pending/verified/rejected/flagged], flag_reason, registered_at, consent_id)
+asset_ownership_history (id, asset_id, customer_id, from_date, to_date, transfer_reason)
+asset_hierarchy (id, parent_asset_id, child_asset_id, relation)
+asset_status_log (id, asset_id, status, reason, at)
+warranty_policies (id, name, product_id/category_id, country_id, coverage_json[parts/labor/onsite], duration_months, start_trigger, usage_limit_json, exclusions_json, transferable, registration_required, deductible, currency, effective_from, status)
+service_contract_plans (id, name, type[extended_warranty/amc/sla_plan], coverage_json, duration_months, price, currency, status)
+asset_coverages (id, asset_id, warranty_policy_id/plan_id, start_date, end_date, status[active/expired/voided/transferred], void_reason)
+warranty_accrual_rates (id, product_id, rate_pct, basis, effective_from)
+serial_master (id, serial_no, product_id, lot_id, manufactured_on, ship_to_region, status)   -- production/shipment records se sync
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/registration    POST .../registration/:id/verify|reject    POST .../registration/bulk
+GET /api/cs/assets    GET .../assets/:id/360    POST .../assets/:id/transfer    POST .../assets/:id/decommission
+GET/POST/PUT /api/cs/warranty/policies    GET/POST/PUT .../service-plans
+GET /api/cs/assets/:id/coverage    POST .../coverage/calculate
+```
+
+### Core Logic
+1. Registration par serial `serial_master` se validate hota hai. Match na ho ya region mismatch (grey-market) ho to flagged.
+2. Warranty start date policy ke trigger se (purchase/installation/registration). Registration-required wali policy mein bina registration ke claim reject ya proof-of-purchase fallback (config).
+3. Ownership transfer par coverage transferable policy ke hisaab se continue ya void hota hai.
+4. Asset ka recall status (Screen 10) asset 360 pe dikhta hai, aur registered customer ko recall notice seedhe jata hai (isliye registration data complete rakhna zaruri).
+5. Consent aur data minimization: registration data sirf service/safety ke purpose ke liye, marketing alag consent.
+6. `audit_log` har action pe.
+
+---
+
+## SCREEN 7: Warranty Claims (6 tabs)
+
+**Tab 1. Receive Warranty Claims** (6.3.2.1)
+- Claim intake: customer portal/app, agent, dealer/service partner portal, EDI/API, bulk upload
+- Claim form: asset/serial, failure date, symptom/failure code, parts/labor, repair order, usage reading, photos/videos, proof of purchase
+- Claim types: standard, extended, goodwill, campaign/recall-based, pre-delivery damage, parts warranty
+- Claim queue, duplicate detection at entry
+
+**Tab 2. Validate Claims** (6.3.2.2)
+- Auto-validation: coverage active, serial valid, claim within window, failure code covered, labor/part rates within schedule, duplicate/near-duplicate, prior claim history
+- Fraud/risk scoring with reasons, missing-info request (SLA pause), rule-result panel per check
+- Auto-adjudicate low-risk claims (straight-through), route others to analyst
+- Campaign/recall-claim eligibility check
+
+**Tab 3. Investigate Warranty Issues** (6.3.2.3: .1 to .5)
+- Define issue: failure code, symptom, severity, linked cases/complaints, similar claims (6.3.2.3.1)
+- Schedule field service: creates service order (Screen 9) for diagnosis/inspection (6.3.2.3.2)
+- Part return: defective part request (RMA to dealer/customer), shipping, receipt, tag/quarantine, chain of custody (6.3.2.3.3)
+- Root-cause analysis: teardown/lab result, 5-why/8D, failure analysis report, attachments (6.3.2.3.4)
+- Investigation result and corrective-action recommendation: cause category (design/manufacturing/supplier/misuse/installation), CAPA link, engineering change request (6.3.2.3.5)
+
+**Tab 4. Responsible Party and Pre-authorization** (6.3.2.4, 6.3.2.5)
+- Responsibility assignment: manufacturer, supplier (component), dealer (installation/PDI error), logistics, customer misuse, with split percentages
+- Pre-authorization requests for expensive repairs/replacements (before work starts): request, estimate, approver, validity period, approved amount cap
+- Approval matrix by amount/product/dealer risk, pre-auth expiry and conversion into claim
+
+**Tab 5. Approve / Reject and Notify** (6.3.2.6, 6.3.2.7)
+- Decision panel: approve (full/partial/adjusted), reject (reason code, policy clause), more-info request, appeal handling
+- Line-level adjudication (part, labor, travel, misc), rate adjustments, policy-reference
+- Notification to originator (customer/dealer/service partner) via preferred channel with reason and next steps, appeal link
+
+**Tab 6. Payment, Closure and Reconciliation** (6.3.2.8, 6.3.2.9, 6.3.2.10)
+- Authorize payment: settlement method (credit note, bank payment, parts credit, replacement), tax/withholding, currency, ERP/AP posting
+- Close claim (closure checklist: payment done, part disposition done, recovery flagged)
+- Reconcile warranty transaction disposition: claim vs payment vs part return vs inventory vs GL accrual vs supplier recovery, with exceptions list
+
+### Tables
+```
+warranty_claims (id, claim_no, claim_type, customer_id, asset_id, product_id, serial_no, originator_type[customer/dealer/service_partner/internal], originator_id, case_id, service_order_id, failure_date, reported_date, failure_code_id, symptom, usage_reading, country_id, status[received/validating/in_investigation/pending_info/pending_preauth/approved/partially_approved/rejected/payment_authorized/paid/closed/appealed], coverage_id, total_claimed, total_approved, currency, risk_score, auto_adjudicated, received_at, closed_at)
+warranty_claim_lines (id, claim_id, line_type[part/labor/travel/misc], part_no, description, qty, unit_cost, claimed_amount, approved_amount, adjustment_reason_id, status)
+warranty_validations (id, claim_id, check_name, result[pass/fail/warn], detail_json, run_at)
+warranty_rejections (id, claim_id, reason_code_id, policy_clause_ref, rejected_by, rejected_at)
+warranty_failure_codes (id, code, description, component_id, category, status)
+warranty_investigations (id, claim_id, issue_definition, severity, field_service_order_id, root_cause_category[design/manufacturing/supplier/misuse/installation/logistics/unknown], rca_method, rca_report_doc_id, recommendation, capa_ref, ecr_ref, status, completed_at)
+warranty_part_returns (id, claim_id, part_no, serial_no, requested_at, shipped_at, received_at, carrier, tracking_no, condition_on_receipt, quarantine_location, disposition[scrap/return_to_supplier/analysis/restock], chain_of_custody_json)
+warranty_responsibility (id, claim_id, party_type[manufacturer/supplier/dealer/logistics/customer], party_id, share_pct, basis, decided_by)
+warranty_preauths (id, preauth_no, asset_id, customer_id/dealer_id, estimate_amount, approved_cap, valid_until, status[requested/approved/rejected/expired/converted], approval_request_id, converted_claim_id)
+warranty_decisions (id, claim_id, decision[approve/partial/reject/info_needed], decided_by, decided_at, rationale, notified_at)
+warranty_appeals (id, claim_id, reason, evidence_docs_json, decision, decided_by, decided_at)
+warranty_payments (id, claim_id, payee_type, payee_id, method[credit_note/bank/parts_credit/replacement], amount, tax_amount, currency, authorized_by, erp_ref, paid_at, status)
+warranty_reconciliation (id, claim_id, claim_amount, paid_amount, accrual_amount, recovery_amount, variance, status[matched/exception], notes, reconciled_at)
+warranty_rate_cards (id, dealer_group_id, labor_rate, markup_pct, travel_rate, country_id, currency, effective_from)
+warranty_rules (id, name, check_type, rule_json, action[auto_reject/flag/route], priority, effective_from, status)
+warranty_fraud_signals (id, claim_id, signal_type[velocity/serial_reuse/grey_market/image_mismatch/dealer_outlier/duplicate/claim_padding], score, detail_json)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/warranty/claims    POST .../claims/:id/validate|submit
+POST .../claims/:id/request-info    GET .../claims/:id/validations    GET .../claims/:id/fraud-signals
+GET/PUT .../claims/:id/investigation    POST .../claims/:id/field-service    GET/POST/PUT .../claims/:id/part-returns    PUT .../part-returns/:pid/receive|dispose
+GET/PUT .../claims/:id/responsibility
+GET/POST/PUT /api/cs/warranty/preauths    POST .../preauths/:id/approve|reject|convert
+POST .../claims/:id/approve|reject|partial    POST .../claims/:id/appeal    PUT .../appeals/:aid/decision
+POST .../claims/:id/authorize-payment    POST .../claims/:id/close    GET/POST .../claims/reconciliation
+GET/POST/PUT /api/cs/warranty/rules    GET/POST/PUT .../rate-cards    GET/POST/PUT .../failure-codes
+```
+
+### Core Logic
+1. Validation checks rule-engine se chalte hain: purchase date, serial number, contract terms aur service history se coverage auto-check. Har check ka result `warranty_validations` mein, taaki analyst ko pata ho claim kyun flag hui.
+2. Fraud scoring ke liye signals: claim velocity, address clustering, ek hi serial ka alag-alag accounts se claim, purchase validation failure aur grey-market serial. Inhe `warranty_fraud_signals` mein score ke saath rakho, aur sirf "suspicious" label na lagao, reason bhi dikhao. Dealer-level outlier (kisi dealer ka failure rate network se kaafi zyada) alag signal hai.
+3. Low-risk, rule-clean claims straight-through auto-approve (threshold config), baaki analyst queue mein. Auto-reject sirf hard-rule fail par (coverage expired, serial invalid) aur reason ke saath.
+4. Investigation: field service order Screen 9 ko create hota hai, aur result claim se link. Part return par chain-of-custody, quarantine aur disposition (analysis/scrap/supplier return) track, kyunki supplier recovery ke liye part evidence zaruri hai.
+5. Root cause "supplier" aur "design/manufacturing" ho to CAPA/ECR link create hota hai, aur cause "supplier" ho to Screen 8 recovery suggestion.
+6. Responsibility split ka total 100% hona validation hai. Is split se supplier recovery aur dealer chargeback ki amount nikalti hai.
+7. Pre-auth: approved cap tak hi payment ho sakti hai, `valid_until` ke baad expire. Cap se zyada actual cost par re-approval.
+8. Decision par originator ko notification (reason, policy clause, appeal ka rasta). Appeal ke liye alag reviewer (original decision-maker nahi).
+9. Payment authorization amount-wise approval matrix se, aur payment ke baad ERP/AP posting aur warranty accrual adjustment. Currency conversion claim ke date ke rate se.
+10. Closure checklist: payment complete + part disposition complete + recovery flag decided. Warna close nahi hoga.
+11. Reconciliation: claim amount vs payment vs accrual vs part return vs supplier recovery. Variance ya missing records exceptions queue mein.
+12. SLA: claim intake se decision tak aur decision se payment tak, dono ka target config.
+13. Campaign/recall claims alag type mein, jin par standard coverage check nahi lagta (recall remedy free hoti hai), aur wahi Screen 10 ke remedy tracking se sync hota hai.
+14. `audit_log` har action pe.
+
+---
+
+## SCREEN 8: Supplier Recovery (2 tabs)
+
+**Tab 1. Create Supplier Recovery Claims** (6.3.3.1)
+- Eligible-claim pool: warranty claims jahan supplier responsible hai (split se), plus component failure batches
+- Claim builder: supplier, part/component, failure count, lots, cost basis (parts + labor + logistics, supplier contract ke hisaab se), evidence (returned parts, test reports, photos)
+- Single-claim aur collective/batch claim (ek hi supplier, ek hi failure mode ke bahut claims ek baar mein), contract/warranty-terms validation (supplier ki warranty to us, time limits)
+- Validation before send (master data, eligibility, evidence complete), likelihood-to-recover score
+
+**Tab 2. Negotiate Recoveries** (6.3.3.2)
+- Supplier response tracker: accept/dispute/counter, supplier comments, evidence exchange, portal access for suppliers
+- Negotiation log: offer, counter, concession, final amount, approval, deadline
+- Settlement: credit note/debit note/chargeback/payment, ERP posting, partial settlement, write-off with approval
+- Recovery analytics: recovery rate, ageing, supplier scorecard, top failure components
+
+### Tables
+```
+supplier_recovery_claims (id, recovery_no, supplier_id, claim_type[single/collective], period_from, period_to, component_id, lot_ids_json, failure_count, claimed_amount, currency, evidence_docs_json, status[draft/validated/sent/disputed/negotiating/agreed/settled/written_off/closed], recover_score, sent_at, due_at, created_by)
+supplier_recovery_lines (id, recovery_id, warranty_claim_id, part_no, part_serial, supplier_share_pct, line_amount, evidence_ref, status)
+supplier_contract_terms (id, supplier_id, component_id, warranty_months, coverage_json, recovery_basis[cost/cost_plus/fixed], handling_fee_pct, claim_window_days, effective_from)
+supplier_responses (id, recovery_id, response_type[accept/dispute/counter], amount, comments, documents_json, received_at)
+supplier_negotiations (id, recovery_id, round_no, our_position, supplier_position, outcome, approver_id, at)
+supplier_settlements (id, recovery_id, method[credit_note/debit_note/payment/offset], amount, currency, erp_ref, settled_at, status)
+supplier_writeoffs (id, recovery_id, amount, reason, approval_request_id)
+supplier_scorecards (id, supplier_id, period, failure_rate_ppm, recovery_rate_pct, dispute_rate_pct, avg_days_to_settle)
+```
+
+### APIs
+```
+GET /api/cs/recovery/eligible-claims
+GET/POST/PUT /api/cs/recovery/claims    POST .../claims/:id/validate|send|close
+POST .../claims/collective/build
+GET/POST .../claims/:id/responses    GET/POST .../claims/:id/negotiations
+POST .../claims/:id/settle    POST .../claims/:id/writeoff
+GET/POST/PUT /api/cs/recovery/contract-terms    GET /api/cs/recovery/analytics    GET .../supplier-scorecards
+```
+
+### Core Logic
+1. Sirf valid aur likely-to-be-paid claims bhejo. Isliye contract window, part evidence, eligibility aur master-data validation pehle: ye supplier-recovery ka standard practice hai (sirf wo claims bhejo jo valid hain aur paise milne ke chances hain, taaki time bache aur supplier satisfaction badhe).
+2. Zyada platforms mein supplier recovery ek-ek claim ke hisaab se chalti hai, jisse recovery slow ya skip hoti hai. Isliye collective claim builder (same supplier + component + failure mode ke claims ko batch) is tool ka differentiator rakho.
+3. Recoverable amount = claim line amount x supplier share % (Screen 7 responsibility) + contract ke hisaab se handling fee. Contract window se bahar ki claim auto-flag (non-recoverable, write-off suggestion).
+4. Supplier ko portal ya EDI se claim bheji jati hai, aur response, dispute aur counter portal se wapas aate hain.
+5. Negotiation ka har round log hota hai, aur final settlement amount approval workflow (amount-wise) se. Write-off ke liye alag approval.
+6. Settlement par ERP credit/debit note post hota hai, aur warranty reconciliation (Screen 7 Tab 6) mein recovery amount update.
+7. Supplier scorecard failure rate (ppm), recovery rate aur dispute rate se banta hai, aur procurement/quality team ko feed.
+8. `audit_log` har action pe.
+
+---
+
+## SCREEN 9: Field Service & Service Orders (4 tabs)
+
+**Tab 1. Confirm Service Requirements** (6.3.4.1: .1 to .3)
+- Process customer request: request intake (case/portal/phone/IoT alert/predictive), service type (install/repair/maintenance/inspection/upgrade), asset, symptom, preferred window (6.3.4.1.1)
+- Create/update customer profile: sites, access instructions, contacts, equipment, entitlement, special needs, language (6.3.4.1.2)
+- Generate service order: scope, checklist, required skills/certifications, parts required, estimated duration, SLA, price/quote or warranty/contract coverage (6.3.4.1.3)
+- Quote/estimate approval for chargeable work
+
+**Tab 2. Resource Planning and Scheduling** (6.3.4.2: .1, .2)
+- Resourcing plan: demand by skill/territory/day, technician capacity, parts availability, vehicle/tool needs, contractor/partner capacity (6.3.4.2.1)
+- Service order fulfillment schedule: appointment slot offer to customer, auto-schedule against SLA windows, skills, certifications, location, travel time, van stock (6.3.4.2.2)
+- Territory/zone management, multi-day/multi-technician jobs, emergency/priority insertion, appointment confirmation/reminders
+- Parts reservation and procurement trigger if not on van/warehouse
+
+**Tab 3. Service Delivery** (6.3.4.3: .1 to .3)
+- Organize daily fulfillment schedule: dispatcher board (map and gantt), route optimization, re-dispatch on delay/cancel/no-show (6.3.4.3.1)
+- Execute product repair: technician mobile app (works offline), job checklist, diagnostics/asset history, parts used (van stock), time tracking, photos, customer signature, safety checklist, knowledge/guided repair (6.3.4.3.2)
+- Manage service order fulfillment: live status, ETA notifications to customer, SLA risk, follow-up visits, completion, invoicing/warranty billing, partner/contractor job handling (6.3.4.3.3)
+
+**Tab 4. Ensure Service Quality** (6.3.4.4: .1 to .4)
+- Identify completed orders for feedback (survey rules, sampling, exclusion of recent surveys) (6.3.4.4.1)
+- Identify incomplete orders and service failures: repeat visit, first-time-fix failure, missed SLA, no-show, customer complaint, parts missing (6.3.4.4.2)
+- Solicit customer feedback: post-service survey by preferred channel (CSAT/CES/NPS, technician rating) (6.3.4.4.3)
+- Process feedback: sentiment, root cause, technician coaching, service recovery action (revisit/credit), trend by technician/territory/product (6.3.4.4.4)
+
+### Tables
+```
+service_requests (id, request_no, customer_id, case_id, asset_id, claim_id, source[case/portal/phone/iot/predictive/warranty], service_type, symptom, priority, preferred_window_json, status, created_at)
+customer_sites (id, customer_id, address_json, geo_lat, geo_lng, access_notes, contact_id, site_type, status)
+service_orders (id, so_no, request_id, customer_id, site_id, asset_id, service_type, entitlement_id, coverage_type[warranty/contract/chargeable/goodwill], skills_required_json, est_duration_mins, sla_policy_id, sla_due_at, quote_id, status[created/scheduled/dispatched/en_route/in_progress/on_hold/completed/cancelled/failed/closed], scheduled_start, scheduled_end, actual_start, actual_end, technician_id, partner_id, is_repeat_visit, first_time_fix, parent_so_id)
+service_order_tasks (id, so_id, checklist_item, result, mandatory, completed_at)
+service_order_parts (id, so_id, part_no, qty_planned, qty_used, source[van/warehouse/procured], serial_removed, serial_installed, status)
+service_order_time (id, so_id, technician_id, type[travel/work/wait], start, end)
+service_order_evidence (id, so_id, type[photo/video/signature/report], file_url, taken_at, geo_json)
+service_quotes (id, quote_no, so_id, lines_json, total, currency, status[draft/sent/approved/rejected/expired], approval_request_id)
+technicians (id, user_id/partner_id, type[employee/contractor/partner], skills_json, certifications_json, territory_id, home_base_json, shift_calendar_id, vehicle_id, status)
+service_territories (id, name, polygon_json, parent_id, dispatcher_group_id)
+service_capacity (id, territory_id, date, skill_id, capacity_mins, booked_mins)
+appointment_slots (id, so_id, offered_json, selected_slot, confirmed_at, customer_response)
+van_stock (id, vehicle_id, part_no, qty, min_qty, last_replenished_at)
+part_reservations (id, so_id, part_no, qty, location_id, status)
+dispatch_events (id, so_id, technician_id, event[assigned/accepted/started/arrived/completed/reassigned/no_show], at, geo_json, reason_code_id)
+service_invoices (id, so_id, customer_id, amount, tax, currency, erp_ref, status)
+service_feedback (id, so_id, customer_id, channel_id, csat, ces, nps, tech_rating, comment, sentiment, received_at)
+service_failures (id, so_id, failure_type[repeat_visit/no_show/sla_miss/parts_missing/incomplete/complaint], detected_at, root_cause, action_taken, owner_id, status)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/service/requests    POST .../requests/:id/create-order
+GET/POST/PUT /api/cs/service/orders    POST .../orders/:id/quote|schedule|dispatch|start|complete|cancel|close
+GET/PUT /api/cs/service/orders/:id/tasks    GET/POST .../orders/:id/parts    GET/POST .../orders/:id/evidence    GET/POST .../orders/:id/time
+GET/POST/PUT /api/cs/service/customer-sites
+POST /api/cs/service/schedule/auto    GET .../schedule/slots?so=X    POST .../schedule/confirm    GET .../dispatch/board
+GET/POST/PUT /api/cs/service/technicians    GET/PUT .../territories    GET .../capacity
+GET/POST /api/cs/service/van-stock    POST .../parts/reserve
+POST /api/cs/service/mobile/sync    (offline-first sync endpoint for technician app)
+GET /api/cs/service/quality/completed    GET .../quality/failures    POST .../quality/survey-send    GET .../quality/feedback
+```
+
+### Core Logic
+1. Service order create hote hi coverage type decide hota hai: warranty (Screen 7), contract entitlement, ya chargeable (quote approval ke baad hi schedule).
+2. Scheduling ke inputs: technician ke skills, certifications, current location, availability aur har van mein stocked parts. Dispatcher ko pehle hi pata hona chahiye ki sahi part hai ya nahi, warna repeat visit hoga.
+3. Auto-scheduler SLA window, appointment window, route/travel time, territory aur depot constraints respect karta hai. Manual override log hota hai.
+4. SLA risk prediction: job duration aur travel pattern se breach se pehle predict, aur dispatcher ko re-schedule suggestion (proactive alerts aur breach prediction ek advanced FSM capability hai).
+5. Technician mobile app offline kaam kare. Job details, asset history, checklists aur parts list depot chhodne se pehle load ho jate hain, aur online aane par sync (conflict rule: server timestamp + field-level merge, parts consumption kabhi overwrite nahi).
+6. Parts used inventory se auto-deduct hote hain, aur removed (defective) part serial warranty part-return flow (Screen 7 Tab 3) ko jata hai.
+7. First-time-fix = job complete aur 7 din (config) mein same issue pe revisit nahi. Revisit hone par `service_failures` entry aur parent order link.
+8. Completion par customer signature/photo/checklist mandatory (config), warna close nahi hoga. Phir invoicing (chargeable) ya warranty billing (Screen 7).
+9. ETA/status notifications customer ko (technician en route, delay, completed).
+10. Quality: completed orders se survey sample (recently surveyed customers exclude), failure orders par automatic service-recovery action suggest (revisit, credit, apology) aur technician coaching task.
+11. Contractor/partner jobs alag portal se dispatch hote hain, aur partner ka performance aur claim (chargeback) Screen 7/8 se link.
+12. `audit_log` har action pe.
+
+---
+
+# PART 4: RECALLS AND EVALUATION (6.4, 6.5)
+
+## SCREEN 10: Recall Management (6 tabs)
+
+**Tab 1. Initiate Recall** (6.4.1)
+- Trigger sources: complaint/incident spikes, warranty failure clusters, test failures, regulator notice, supplier notification, internal QA, social/media signal
+- Recall case: product, models, lots/serial ranges, date range, countries/regions, units in market (sold/in-stock/in-transit/with-dealers/with-customers), defect description, failure mode
+- Recall type (consumer-level/trade-level/market withdrawal/field correction/software update), voluntary vs mandatory, decision committee workflow (Quality, Legal, Regulatory, Product, Communications, Finance), approval log
+- Immediate containment: ship-hold/stop-sale, quarantine inventory, block sales channels and marketplaces
+
+**Tab 2. Hazard Assessment** (6.4.2)
+- Hazard analysis: hazard description, affected population, likelihood (occurrence probability), severity of consequences, detectability, vulnerable users, incident evidence
+- Risk matrix scoring and classification (class I/II/III or equivalent per regime), existing incidents/injuries/deaths count, trend
+- Health-hazard evaluation record, expert/engineering input, decision rationale, reassessment history
+- Remedy options: repair, replace, refund, software fix, label/warning update, with feasibility and cost
+
+**Tab 3. Recall Communications** (6.4.3)
+- Audience segments: registered customers, purchasers (via orders/loyalty), dealers/retailers/distributors, marketplaces, regulators, media/public, internal staff, call-center scripts
+- Recall notice builder using regulator templates (multi-language, accessible formats), distribution (mail/email/SMS/WhatsApp/push/press release/website banner/social/in-store)
+- Customer response handling: recall landing page (enter serial, check affected/not affected, choose remedy), dedicated hotline/chatbot, FAQs
+- Trade communication (stop-sale notices, return-to-stock instructions, acknowledgement tracking), repeat/reminder waves
+
+**Tab 4. Regulatory Reports and Audits** (6.4.4, "regulatory audits" in 6.4)
+- Regulator report workspace: initial notification, recall plan, periodic progress reports, final report, per regime (US/EU/India/others), clock tracker and submission log
+- Regulator correspondence, inspection/audit management (audit request, document pack, findings, response, CAPA)
+- Evidence library (hazard analysis, notices, remedy proof, distribution records), audit-readiness checklist
+
+**Tab 5. Monitor and Audit Effectiveness** (6.4.5)
+- Remedy progress: units recalled/contacted/remedied/destroyed/unreachable, response rate by region/channel/lot, remedy backlog
+- Effectiveness checks: consignee audits (trade level), consumer response checks (sample), non-responder follow-up waves
+- Inventory reconciliation: found/quarantined/reworked/scrapped vs expected, supplier and dealer compliance
+- New incidents after recall (continued failures), escalation of strategy if response rate low
+
+**Tab 6. Recall Termination** (6.4.6)
+- Termination criteria: response rate threshold, remedy completion, regulator concurrence, no further incidents, inventory disposition done
+- Termination package: final report, effectiveness summary, cost report, lessons learned, CAPA closure
+- Regulator termination request/approval tracking, post-termination monitoring window, archival and retention lock
+
+### Tables
+```
+recalls (id, recall_no, title, product_id, models_json, lot_ids_json, serial_ranges_json, date_from, date_to, countries_json, defect_description, failure_mode, recall_type[consumer/trade/withdrawal/correction/software], mandate[voluntary/mandatory], status[draft/under_assessment/approved/active/monitoring/termination_requested/terminated/rejected], initiated_by, initiated_at, trigger_source, trigger_ref, committee_decision_json, units_manufactured, units_in_market, units_with_customers, owner_id)
+recall_triggers (id, recall_id, source_type[complaint_spike/warranty_cluster/test_failure/regulator/supplier/qa/social], ref_id, evidence_json, at)
+recall_scope_units (id, recall_id, serial_no/lot_id, customer_id, asset_id, dealer_id, location, status[identified/notified/responded/remedied/destroyed/unreachable/not_affected], remedy_id, last_contact_at)
+recall_containment (id, recall_id, action[stop_sale/ship_hold/quarantine/channel_block], scope_json, executed_at, owner_id, evidence_ref)
+recall_hazard_assessments (id, recall_id, hazard, affected_population_json, likelihood, severity, detectability, risk_score, classification, incidents_json, rationale, assessed_by, assessed_at, version)
+recall_remedies (id, recall_id, remedy_type[repair/replace/refund/software/label], description, unit_cost, feasibility, status, offered_options_json)
+recall_comm_plans (id, recall_id, audience_segment, channel, template_id, language_code, scheduled_at, sent_at, wave_no, reach_count, status)
+recall_notices (id, recall_id, notice_type[consumer/trade/press/regulator], language_code, content, approved_by, version, status)
+recall_responses (id, recall_id, scope_unit_id, response_type[claimed_remedy/not_affected/disposed/no_response], channel_id, at, remedy_id)
+recall_trade_acks (id, recall_id, dealer_id, notice_sent_at, acknowledged_at, stock_reported, stock_quarantined, status)
+recall_effectiveness_checks (id, recall_id, check_level, method[consignee_audit/consumer_sample/site_visit], sample_size, result_json, checked_by, at)
+recall_inventory (id, recall_id, location_id, expected_qty, found_qty, quarantined_qty, reworked_qty, scrapped_qty, reconciled_at)
+recall_cost_items (id, recall_id, category[notification/logistics/remedy/disposal/legal/other], amount, currency, incurred_on)
+recall_audits (id, recall_id, regulator_id, audit_type, requested_at, due_at, findings_json, response_doc_id, status)
+recall_terminations (id, recall_id, criteria_met_json, final_report_doc_id, lessons_learned, requested_at, regulator_approved_at, status)
+recall_lessons (id, recall_id, area, finding, action, owner_id, status)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/recalls    POST .../recalls/:id/submit|approve|activate|reject|terminate-request|terminate
+GET/POST .../recalls/:id/triggers    POST /api/cs/recalls/signals/scan    GET .../signals
+POST .../recalls/:id/scope/build    GET .../recalls/:id/scope    GET .../recalls/:id/scope/check-serial?serial=X    (public lookup)
+POST .../recalls/:id/containment
+GET/POST/PUT .../recalls/:id/hazard    GET/POST/PUT .../recalls/:id/remedies
+GET/POST/PUT .../recalls/:id/comm-plans    POST .../comm-plans/:pid/send    GET/POST .../recalls/:id/notices
+GET/POST .../recalls/:id/responses    GET/POST .../recalls/:id/trade-acks
+GET/POST .../recalls/:id/regulatory-reports    GET/POST .../recalls/:id/audits    GET/POST .../recalls/:id/correspondence
+GET /api/cs/recalls/:id/progress    GET/POST .../recalls/:id/effectiveness-checks    GET/POST .../recalls/:id/inventory
+GET/POST .../recalls/:id/costs    GET/POST .../recalls/:id/lessons
+```
+
+### Core Logic
+1. Recall signal scanner: complaint spikes (Screen 4), warranty failure clusters by lot/part (Screen 7), return-reason clusters (Screen 5), safety incidents (Screen 5) aur supplier alerts ko continuously scan karke "potential recall" suggest karta hai. Suggest hone ka matlab recall nahi, committee review shuru hota hai.
+2. Scope builder: lot/serial/date range se `assets`, `product_registrations`, orders aur dealer shipments join karke affected units, customers aur channels nikalta hai. Jo units ka customer unknown hai unko "unidentifiable (public notice only)" mark.
+3. Containment (stop-sale/ship-hold) recall approval ke saath hi turant execute ho sakta hai (committee approval se pehle emergency containment allowed, alag approval).
+4. Hazard assessment mein likelihood aur severity se risk score banta hai, aur classification regime ke hisaab se (class I/II/III ya equivalent) config scale se. Reassessment version history ke saath.
+5. Regulatory trigger logic: US consumer products mein 24 ghante ka "immediately" clock aur recall ke baad CPSC ko monthly progress reports, medical devices mein 21 CFR 806 ke 10 working days (Screen 5 Logic 6), EU mein GPSR. GPSR recall mein affected consumers ko effective, cost-free aur timely remedy ka haq hai, aur kam se kam do options (repair, replacement ya refund) offer karne padte hain, isliye `recall_remedies` mein EU scope ke liye kam se kam do options ki validation. Recall notice ke liye EU mein Implementing Regulation (EU) 2024/1435 ka mandatory template, aur direct notification ka rule: responsible economic operator ko affected consumers ko directly, simple language mein, turant writing mein inform karna hota hai. Ye sab config + country template se, hardcode nahi.
+6. Communication wave plan: registered customers ko direct, baaki ko public notice. Non-responders ko config gap (jaise 14/30/60 din) par reminder wave. Har send ka delivery/bounce track.
+7. Public serial lookup page: serial/lot daalo to affected/not affected aur remedy options, aur kisi bhi customer ki personal data expose na ho.
+8. Remedy requests recall response se `warranty_claims` (campaign type) ya `service_orders` ya `return_requests` create karte hain, aur status recall scope unit se sync.
+9. Effectiveness checks: FDA-style effectiveness check levels (A se F) audit kiye jane wale consignees ke percentage se juday hote hain. System check level config mein rakhta hai aur sample size recall class se suggest karta hai.
+10. Inventory reconciliation: expected vs found vs quarantined vs reworked vs scrapped. Gap par investigation task.
+11. Termination criteria (response threshold, remedy completion, regulator concurrence) config se. Sab satisfy hone par hi "termination requested", aur regulator approval ke baad terminated. Terminate ke baad data retention lock aur monitoring window.
+12. Cost tracking aur lessons learned (CAPA/design change) product/quality teams ko feed.
+13. Recall data legal hold: edit/delete band, sirf append-only versions.
+14. `audit_log` har action pe.
+
+---
+
+## SCREEN 11: Customer Satisfaction & Feedback (3 tabs)
+
+**Tab 1. Service Experience Satisfaction** (6.5.1: .1 to .3)
+- Solicit feedback on service experience: survey designer (CSAT/CES/NPS/open text), triggers (post-case, post-call, post-chat, post-portal), channel (email/SMS/WhatsApp/in-app/IVR), sampling and frequency cap, multi-language (6.5.1.1)
+- Analyze service data and improvement opportunities: score trends by channel/queue/agent/issue/segment, driver analysis (what drives low CSAT), text analytics, FCR, repeat contact, AHT vs satisfaction, root-cause themes (6.5.1.2)
+- Provide feedback to product management: product-linked issue themes, top contact reasons per product, "voice of customer" report, action tracker with owner/due/status (6.5.1.3)
+
+**Tab 2. Complaint Handling Satisfaction** (6.5.2: .1 to .3)
+- Solicit feedback on complaint handling and resolution: post-closure survey (fairness, speed, outcome, communication), appeal and reopen link (6.5.2.1)
+- Analyze complaint data: satisfaction vs resolution type/time/compensation, detractor recovery, recontact after closure (6.5.2.2)
+- Identify common complaints: top themes, Pareto, emerging issues, systemic issue list, linked CAPA/product actions (6.5.2.3)
+
+**Tab 3. Product and Service Satisfaction** (6.5.3: .1 to .5)
+- Post-sale feedback on products and services: periodic surveys (30/90/365 days), reviews/ratings ingestion (marketplaces, app stores, social), product-linked NPS (6.5.3.1)
+- Promotion effectiveness feedback: post-purchase promo/offer perception, redemption experience (6.5.3.2)
+- Cross-channel experience feedback: omnichannel journey survey (online to store to service), channel-switch pain points (6.5.3.3)
+- Analyze product/service satisfaction: model/lot/version-wise scores, defect themes, warranty/return correlation, improvement opportunity ranking (6.5.3.4)
+- Provide insights to teams: product design/development, marketing, manufacturing, with routed insight packs, subscriptions, acknowledgement and action status (6.5.3.5)
+
+### Tables
+```
+surveys (id, name, type[csat/ces/nps/custom], trigger_event, channel_ids_json, questions_json, languages_json, sampling_rule_json, frequency_cap_days, status)
+survey_invitations (id, survey_id, customer_id, ref_type, ref_id, channel_id, sent_at, opened_at, status[sent/opened/completed/expired/suppressed], suppress_reason)
+survey_responses (id, invitation_id, survey_id, customer_id, ref_type, ref_id, score_json, csat, ces, nps, comment, language, sentiment, topics_json, received_at)
+feedback_external (id, source[marketplace/app_store/social/review_site], product_id, rating, text, url, sentiment, topics_json, at)
+feedback_topics (id, name, parent_id, product_id, definition, status)
+voc_insights (id, theme, product_id, evidence_json, volume, trend, severity, recommended_action, routed_to_team, status[new/acknowledged/in_progress/done/rejected], owner_id, due_date)
+improvement_actions (id, source[survey/complaint/warranty/return/field], insight_id, action, owner_id, due_date, status, outcome_metric_before, outcome_metric_after)
+complaint_surveys (id, complaint_id, fairness_score, speed_score, outcome_score, comm_score, would_reuse, comment, received_at)
+promo_feedback (id, promotion_id, customer_id, perceived_value, redemption_ease, comment, at)
+journey_feedback (id, customer_id, journey_json, pain_points_json, channel_switches, score, at)
+product_satisfaction_snapshots (id, period, product_id, lot_id, nps, csat, defect_rate, return_rate, warranty_rate, sample_size)
+insight_subscriptions (id, team_id, topics_json, products_json, frequency)
+```
+
+### APIs
+```
+GET/POST/PUT /api/cs/feedback/surveys    POST .../surveys/:id/publish    POST .../invitations/send    POST .../responses (public tokenised)
+GET /api/cs/feedback/responses    GET .../feedback/analytics?dim=channel|queue|agent|product|segment
+GET /api/cs/feedback/drivers    GET .../feedback/topics    GET/POST/PUT .../feedback/external
+GET/POST/PUT /api/cs/feedback/insights    POST .../insights/:id/route
+GET/POST/PUT /api/cs/feedback/actions
+GET /api/cs/feedback/complaints/themes    GET .../complaints/satisfaction
+GET /api/cs/feedback/products/:id/satisfaction    GET/POST .../subscriptions
+```
+
+### Core Logic
+1. Survey trigger event se auto: case closed, call ended, complaint closed, service order complete, delivery+30/90 days. Frequency cap aur recently-surveyed suppression, taaki customer pe survey fatigue na ho.
+2. Metrics ka matlab alag hai, isliye teeno rakho: NPS loyalty/recommendation, CSAT satisfaction, aur CES yeh dikhata hai ki issue solve karwana kitna aasan tha. In ko operational data (handle time, FCR, wait time) aur business outcome (churn, revenue) se correlate karna zaroori hai taaki CX investment decisions evidence-based ho.
+3. Survey response aane par sentiment aur topics auto-extract hote hain, aur negative response (config threshold) par "closed-loop" case create/reopen (callback task) turant.
+4. Predicted CSAT: jin interactions ka survey response nahi aata unke liye predicted score (QA signals se), aur actual vs predicted ki accuracy track hoti hai. Predicted score ko "estimate" label ke saath hi dikhana.
+5. Interaction analytics se 100% conversations par themes nikalte hain, jisse emerging issues ghanton mein dikh jate hain, weeks mein nahi. Surveys sirf ek sample dete hain.
+6. Driver analysis: kaun se factors (wait time, transfers, FCR, resolution time, channel) CSAT/CES ko sabse zyada move karte hain, taaki improvement actions prioritize hon.
+7. Insight route: topic/product ke hisaab se product-design, marketing, manufacturing team ko auto-route, aur acknowledgement + status zaruri. Unacknowledged insights par reminder.
+8. Complaint satisfaction aur common complaints: Screen 4 Tab 5 ke data se. Detractor-after-closure par second-level recovery workflow.
+9. Product/lot satisfaction snapshot defect, return aur warranty rates ke saath join hota hai. Lot-level drop Screen 10 ke signal scanner ko jata hai.
+10. External reviews ingestion terms-of-service ke andar hi, aur PII minimal.
+11. Survey consent: marketing-type survey ke liye alag consent. Service-satisfaction survey legitimate purpose, aur opt-out har invitation mein.
+12. `audit_log` har action pe.
+
+---
+
+## SCREEN 12: Warranty & Recall Performance (2 tabs)
+
+**Tab 1. Warranty Performance Management** (6.5.4: .1 to .5)
+- Customer satisfaction with warranty handling and resolution: warranty-claim survey, time-to-resolution vs satisfaction (6.5.4.1)
+- Warranty metrics dashboard: claim rate per 1,000 units, cost per unit sold, cost per claim, MTTR, first-time approval rate, auto-adjudication rate, claim ageing, repeat failure, supplier recovery %, accrual vs actual, failure rate by lot/age/region/dealer (6.5.4.2)
+- Improvement opportunities: top failure modes, process delays, rejection/appeal reasons, ranked by cost and customer impact (6.5.4.3)
+- Warranty waste elimination: no-fault-found (NFF) rate, over-repair, parts replaced unnecessarily, duplicate payments, rate/labor leakage, unrecovered supplier cost, out-of-policy goodwill (6.5.4.4)
+- Fraud investigation: case workbench for flagged claims/dealers, signal drill-down, evidence, dealer audit, chargeback/recovery, recoup of overpayment, blacklist/watchlist, outcome feedback to the model (6.5.4.5)
+
+**Tab 2. Recall Performance** (6.5.5)
+- Recall scorecard: time from signal to decision, decision to containment, decision to notice, response rate, remedy completion rate, units unreachable, cost per unit, post-recall incidents, regulator findings
+- Recall comparison across history (benchmark vs earlier recalls), lessons learned and action closure
+- Early-detection performance: how many days between first signal and recall (detection latency), missed-signal review
+- Readiness drills: mock recall exercises (traceability test: time to identify all affected customers), results and gaps
+
+### Tables
+```
+warranty_metrics_monthly (id, period, scope_json, units_sold, claims, claim_rate_per_k, cost_total, cost_per_unit, cost_per_claim, mttr_days, first_time_approval_pct, auto_adjudication_pct, ageing_json, recovery_pct, accrual, actual)
+warranty_improvement_opps (id, theme, evidence_json, est_savings, customer_impact, owner_id, status, due_date)
+warranty_waste_findings (id, waste_type[nff/over_repair/unnecessary_parts/duplicate_payment/rate_leakage/unrecovered/goodwill_out_of_policy], scope_json, amount, detected_at, action, status)
+warranty_fraud_cases (id, case_no, subject_type[customer/dealer/partner/technician], subject_id, claim_ids_json, signals_json, estimated_loss, status[open/investigating/confirmed/cleared/recovered], investigator_id, outcome, recovered_amount, opened_at, closed_at)
+warranty_watchlist (id, subject_type, subject_id, reason, added_by, review_date, status)
+warranty_audits (id, dealer_id, scope, findings_json, overpayment_amount, chargeback_ref, status)
+fraud_model_feedback (id, fraud_case_id, claim_id, predicted_score, confirmed_label, at)
+warranty_survey_results (id, claim_id, csat, ces, comment, received_at)
+recall_scorecards (id, recall_id, signal_to_decision_days, decision_to_containment_hours, decision_to_notice_hours, response_rate_pct, remedy_completion_pct, unreachable_pct, cost_per_unit, post_recall_incidents, regulator_findings, computed_at)
+recall_drills (id, name, scope_json, started_at, completed_at, units_identified_pct, time_to_identify_hours, gaps_json, owner_id)
+recall_detection_log (id, recall_id, first_signal_at, first_signal_source, detection_latency_days, missed_signals_json)
+```
+
+### APIs
+```
+GET /api/cs/performance/warranty/metrics?scope=X&period=Y    GET .../warranty/failure-modes    GET .../warranty/satisfaction
+GET/POST/PUT /api/cs/performance/warranty/opportunities
+GET /api/cs/performance/warranty/waste    POST .../waste/scan
+GET/POST/PUT /api/cs/performance/fraud/cases    GET .../fraud/cases/:id/signals    POST .../fraud/cases/:id/outcome
+GET/POST/PUT .../fraud/watchlist    GET/POST .../fraud/dealer-audits
+GET /api/cs/performance/recalls/scorecards    GET .../recalls/:id/scorecard    GET .../recalls/compare?ids=1,2,3
+GET/POST /api/cs/performance/recalls/drills    GET .../recalls/detection-latency
+```
+
+### Core Logic
+1. Warranty metrics `warranty_claims`, `assets`, ERP sales aur recovery data se auto-compute. Claim rate = claims / units in-warranty-exposure (units sold nahi, exposure window wale), warna rate galat aayega.
+2. Accrual vs actual variance se warranty reserve model calibrate hota hai, aur finance ko report.
+3. Waste scan rules: NFF rate (part replace hua par defect nahi mila), same part ek asset pe bar-bar, rates schedule se zyada, duplicate payment, supplier-responsible par recovery na hona, policy se bahar goodwill. Har finding ka rupee impact estimate.
+4. Fraud case workbench mein signals (Screen 7 Logic 2) drill-down ke saath, aur dealer-level analysis. Detection ke baad outcome (confirmed/cleared) model feedback mein jata hai taaki false positives kam hon.
+5. Fraud action ke liye due process: kisi customer/dealer ko block/chargeback karne se pehle investigation, evidence aur approval. Sirf score ke aadhar par adverse action nahi.
+6. Dealer overpayment recovery chargeback ke roop mein, aur watchlist ka periodic review.
+7. Warranty satisfaction Screen 11 ke survey data se, aur time-to-resolution vs CSAT correlation.
+8. Recall scorecard recall events se auto-compute, aur detection latency = first signal date se recall decision date. Missed signals review se signal scanner thresholds tune hote hain.
+9. Mock recall drill: ek lot/serial range choose karke dekho kitne affected customers/dealers/inventory kitne time mein identify ho paye. Isse traceability gaps (jaise unregistered units) dikhte hain.
+10. Dashboards ke thresholds `cs_thresholds` se (RAG).
+11. `audit_log` har action pe.
+
+---
+
+# COVERAGE MATRIX (chart node → screen/tab)
+
+| Chart | Screen / Tab |
+|---|---|
+| 6.1.1–6.1.6 | S1 T1–T6 |
+| 6.2.1.1–6.2.1.4 | S2 T1–T4 |
+| 6.2.2.1–6.2.2.6 | S3 T1–T6 |
+| 6.2.3.1–6.2.3.5 | S4 T1–T5 |
+| 6.2.4.1, 6.2.4.2 | S5 T1, T2 |
+| 6.2.5 | S5 T3 |
+| 6.3.1 | S6 T1 (supporting: T2, T3) |
+| 6.3.2.1, 6.3.2.2 | S7 T1, T2 |
+| 6.3.2.3.1–6.3.2.3.5 | S7 T3 |
+| 6.3.2.4, 6.3.2.5 | S7 T4 |
+| 6.3.2.6, 6.3.2.7 | S7 T5 |
+| 6.3.2.8, 6.3.2.9, 6.3.2.10 | S7 T6 |
+| 6.3.3.1, 6.3.3.2 | S8 T1, T2 |
+| 6.3.4.1.1–6.3.4.1.3 | S9 T1 |
+| 6.3.4.2.1, 6.3.4.2.2 | S9 T2 |
+| 6.3.4.3.1–6.3.4.3.3 | S9 T3 |
+| 6.3.4.4.1–6.3.4.4.4 | S9 T4 |
+| 6.4.1 | S10 T1 |
+| 6.4.2 | S10 T2 |
+| 6.4.3 | S10 T3 |
+| 6.4.4 (+ regulatory audits) | S10 T4 |
+| 6.4.5 | S10 T5 |
+| 6.4.6 | S10 T6 |
+| 6.5.1.1–6.5.1.3 | S11 T1 |
+| 6.5.2.1–6.5.2.3 | S11 T2 |
+| 6.5.3.1–6.5.3.5 | S11 T3 |
+| 6.5.4.1–6.5.4.5 | S12 T1 |
+| 6.5.5 | S12 T2 |
+
+Chart ke saare nodes (6.1 se 6.5.5) is table mein mapped hain. Koi node bina tab ke nahi bacha.
+
+---
+
+## Do cheezein jo tumhe pata honi chahiye
+
+1. **Regulatory timelines:** jo bhi din/ghante upar likhe hain (24 hours, 30 calendar days, 15/10/2 days, 10 working days, 48 hours/1 month) wo research se liye gaye hain, par ye law hain aur badalte rehte hain. Unko hamesha `regulatory_clock_rules` config mein rakho, aur production mein jaane se pehle regulatory affairs/legal se verify karwao. Sirf US, EU aur India cover kiye gaye hain, baaki countries ke liye alag research chahiye.
+2. **Isme kya nahi hai:** infra, security architecture, aur deployment (tumne baad mein add karne ko kaha tha). Ek jagah par maine privacy/consent (GDPR, DPDP, call recording, PCI) functional rules mein daale hain, kyunki wo features ko directly affect karte hain.
+
+Sources:
+- [12 Best Omnichannel Customer Support Platforms in 2026 (Kayako)](https://kayako.com/blog/best-omnichannel-customer-support-platforms/)
+- [Microsoft Dynamics 365 Customer Service capabilities](https://www.randgroup.com/insights/microsoft/dynamics-365/customer-engagement/customer-service/microsoft-dynamics-365-customer-service-capabilities-and-features/)
+- [Call Center WFM Software: What Actually Works in 2026](https://www.retellai.com/blog/call-center-workforce-management-software)
+- [Customer Support WFM Statistics 2026](https://stealthagents.com/research/customer-support-workforce-management-statistics-2026)
+- [SAP warranty management: limits of the native process](https://www.claimlane.com/resources/blog/sap-warranty-management)
+- [SAP: Warranty Claim Management, Supplier Recovery Processing](https://learning.sap.com/courses/implementing-in-house-service-processes-in-sap-s-4hana-cloud-public-edition-service/introducing-warranty-claim-management-supplier-recovery-processing_f276f5b3-cfb9-4115-aab0-0c938b8ee9c1)
+- [What Is Warranty Management Software](https://racklify.com/encyclopedia/what-is-warranty-management-software-and-how-it-works/)
+- [Warranty Fraud (ClickPost)](https://www.clickpost.ai/en-us/blog/warranty-fraud)
+- [Field Service Management Software Development (RaftLabs)](https://www.raftlabs.com/industries/field-service)
+- [Field Service (Dynamics Mobile)](https://www.dynamicsmobile.com/app/field-service/)
+- [CPSC Recall Handbook](https://www.cpsc.gov/s3fs-public/RecallHandbookFINAL9_2technicalrevision_3052025.pdf)
+- [Section 15 Reporting Rules (Kitzes)](http://www.productsafety.com/section_15_reporting.htm)
+- [FDA: 21 CFR 806 reporting](https://www.fda.gov/media/89909/download)
+- [Product Recall and Withdrawal Compliance](https://qualitycontrolauthority.com/product-recall-and-withdrawal-compliance/)
+- [Adverse-Event Reporting Compared: FDA 21 CFR 803, EU MDR](https://meddeviceguide.com/blog/medical-device-adverse-event-reporting-legal-text-comparison-guide)
+- [EU MDR Article 87 timelines](https://eumdr.com/?p=1726)
+- [Medical Device Reporting (MDR) glossary](https://www.pureglobal.com/glossary/medical-device-reporting-mdr)
+- [GPSR new obligations (Fieldfisher)](https://fieldfisher.com/en/insights/new-obligations-under-the-general-product-safety-regulation)
+- [GPSR (Baker McKenzie)](https://www.bakermckenzie.com/en/insight/publications/resources/product-risk-radar-articles/general-product-safety-regulation)
+- [GPSR guideline for businesses](https://www.24hour-ar.com/the-new-gpsr-guideline-breaks-down-the-core-obligations-for-businesses)
+- [India E-Commerce Rules and DPDP Act (S.S. Rana)](https://ssrana.in/articles/consumer-protection-e-commerce-amendment-rules-2026-recalibrating-e-commerce-compliance-across-the-indian-data-privacy-framework/)
+- [Complaint Management (SimplerQMS)](https://simplerqms.com/complaint-management/)
+- [Call recording compliance: GDPR, PCI DSS, HIPAA](https://www.gladia.io/blog/call-recording-compliance-gdpr-pci-dss-and-hipaa-for-contact-centers)
+- [Guide to a GDPR Compliant Call Centre](https://gdprlocal.com/call-centre-gdpr/)
+- [Google Cloud Quality AI overview](https://docs.cloud.google.com/contact-center/insights/docs/qai-overview)
+- [What Is Voice of the Customer (NiCE)](https://www.nice.com/glossary/voice-of-the-customer)

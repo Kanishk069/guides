@@ -1,0 +1,1049 @@
+Theek hai bhai, pehle research karta hun, phir poori guide ek saath dunga.Research ho gayi. Jo cheezein guide mein daali hain, unka nichod:
+
+- PSA platforms project management, resource planning, time/expense, billing aur reporting ko ek system mein jodte hain. Isliye Module 3, 4, 7, 8 aur 9 ek hi data model par bane hain.
+- ITIL 4 mein SLA customer, internal team aur third party, teeno ke beech lagu hota hai. OLA internal team ka woh agreement hai jo SLA ko support karta hai.
+- "Watermelon effect" matlab SLA green par customer naraz. Isse bachne ke liye Module 1 mein XLA aur health score hai.
+- ASC 606 / IFRS 15 mein T&M, fixed-price, milestone aur retainer ka recognition alag hota hai. Jo fixed-fee milestones completion se match nahi karte, unke liye percentage-completion method chahiye. Isliye Module 9 mein multi-method revenue recognition hai.
+- Forecast mein accuracy ke saath bias aur Forecast Value Added (FVA) bhi track hota hai. Isse pata chalta hai ki statistical, planner ya executive, kis step ne forecast sudhara ya bigaada. Accuracy lag-wise bhi naapi jati hai.
+- Skills ke liye taxonomy aur ontology dono ek saath chahiye. Skills kitni ek doosre ki jagah le sakti hain (fungibility), yeh capacity planning ke liye zaroori hai.
+- Feedback mein CSAT aur CES transactional hote hain, NPS relationship wala. Closed-loop mein low score par customer ko follow-up jata hai. Health score in teeno ko milakar banta hai.
+
+---
+
+# COMMON FOUNDATION (sab modules pe lagu)
+
+**Common rules:** API prefix `/api/sd/...`. Har create/edit/action `audit_log` mein jayega. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath hoga (delete nahi, disable). Har table mein `entity_id` aur `tenant_id` hoga (multi-company, multi-tenant). Policy, rate, threshold, formula aur timeline **config tables** mein rahenge, hardcode nahi.
+
+**(NEW) Enterprise common rules:**
+- **Idempotency:** har POST action API `Idempotency-Key` header leti hai, taaki double-click ya retry se duplicate record na bane. Har table mein `version` (optimistic locking) hoga.
+- **Event-driven:** har state change `domain_events` (outbox pattern) mein jayega. Dusre modules, webhooks aur integrations wahin se subscribe karenge.
+- **Time:** sab timestamps UTC mein store honge, user ke timezone mein dikhenge. SLA aur timers `business_calendars` (working hours + holidays, location-wise) se chalenge.
+- **Multi-country / currency / language:** amount ke saath currency code, reports mein base-currency conversion, user-facing text `translations` se.
+- **AI-assist rule:** har AI suggestion `ai_suggestions` mein log hoga (model, version, input hash, output). Human accept ya reject karega. Auto-apply sirf config se aur sirf low-risk actions par.
+- **Data classification:** har table/field par tag (public/internal/confidential/restricted). Masking aur row-level access ke hooks abhi se rakho. Security layer baad mein plug hogi.
+- **Customer isolation:** customer-confidential data par `customer_id` scope. Ek customer ka data dusre customer ke project ya report mein kabhi nahi dikhega.
+- **Bulk + API:** har master ke liye bulk import/export, webhooks, aur rate-limit hooks.
+- **Approval Engine upgrade:** parallel steps, conditional steps, send-back, rescind, delegation/proxy, escalation on SLA breach, aur fallback approver.
+
+**Shared tables (HR guide se reuse, wahi single source):**
+```
+audit_log, approval_workflows, approval_requests, approval_actions, approval_delegations,
+notifications, documents (+ retention_class, legal_hold), comments, custom_fields,
+custom_objects / custom_object_records, employees, employee_assignments, org_units, locations,
+cost_centers, legal_entities, countries / country_config, currencies / exchange_rates,
+translations, reason_codes, fiscal_calendars
+skills, skill_synonyms, skill_relations, job_profiles, job_profile_skills  -- HR Module 4 ki skills yahan single source
+```
+
+**(NEW) Service-delivery foundation tables:**
+```
+customers (id, customer_code, name, parent_customer_id, segment[strategic/enterprise/mid/smb], industry, country_id, account_owner_id, exec_sponsor_id, data_residency_json, status)
+customer_contacts (id, customer_id, name, role, email, phone, is_exec_sponsor, is_champion, language_code, status)
+contracts (id, contract_no, customer_id, contract_type[msa/sow/order_form/amendment/change_order], parent_contract_id, billing_model[t_and_m/fixed/milestone/retainer/subscription/outcome/unit_price], start_date, end_date, total_value, currency, auto_renew, notice_days, terms_json, signed_document_id, status)
+contract_lines (id, contract_id, service_id, description, billing_model, rate, qty, uom, currency, start_date, end_date)
+rate_cards (id, name, customer_id[null=standard], currency, effective_from, status) / rate_card_lines (id, rate_card_id, job_profile_id, grade_id, location_id, skill_id, bill_rate, cost_rate, uom, effective_from)
+programs (id, name, customer_id, owner_id, status) / projects (id, project_no, program_id, customer_id, contract_id, service_id, name, delivery_type[project/managed_service/support/staff_aug/hybrid], pm_id, start_date, end_date, status, health_rag, baseline_id, cost_center_id)
+resources (id, resource_type[employee/contractor/vendor_person/team/virtual_pool], employee_id, supplier_id, name, home_org_unit_id, location_id, work_country, cost_rate_ref, status)
+business_calendars (id, name, timezone, working_hours_json, holidays_json, location_id, effective_from)
+suppliers (id, name, supplier_type[staffing/partner/subcontractor/tool_vendor], country_id, tier, risk_rating, contract_end, status)
+domain_events (id, tenant_id, event_type, ref_module, ref_id, payload_json, created_at, published_at)
+webhooks (id, event_types_json, target_url, secret_ref, status) / webhook_deliveries (id, webhook_id, event_id, status, attempts, last_error)
+ai_suggestions (id, module, ref_id, model, model_version, input_hash, output_json, status[proposed/accepted/rejected/expired], reviewed_by, reviewed_at)
+integration_connectors (id, system[crm/erp/hris/itsm/cmdb/iam/billing/lms/monitoring], config_ref, status, last_sync_at, sync_mode[push/pull/two_way])
+tags (id, name) / tag_links (id, tag_id, ref_module, ref_id)
+```
+
+**Dependencies (naam se):** HR Employee Master + Skills (HR guide), CRM/CLM (opportunity, contract), Ledger/Finance (invoice, revenue, cost), Time & Attendance, Procurement, IAM, CMDB/Monitoring, Learning (HR LMS), Approval Engine, Notification Engine, Document Store, Analytics.
+
+---
+
+# PART 1: GOVERNANCE & STRATEGY (5.1)
+
+## MODULE 1: Service Delivery Governance (5.1.1)
+
+### FRONTEND: Screen 1: Service Delivery Governance (6 tabs)
+
+**Tab 1. Governance and Management System** (5.1.1.1)
+- Governance bodies register: Steering Committee, Service Board, CAB, Design Authority, Risk Committee with charter, members, cadence, chair, decision rights, escalation path
+- Service owner / process owner assignment, RACI grid (service process x role, cell = R/A/C/I), "Publish RACI", policy and standards library
+- (NEW) Control library: control, owner, test frequency, evidence, mapped to frameworks (ISO 20000, ISO 27001, SOC 2, ITIL 4 practices, custom)
+- (NEW) Management-system maturity assessment (practice-wise level 1-5, current vs target, gap)
+- (NEW) Decision log (decision, options, owner, date, outcome) and delegation-of-authority matrix (approval limits by amount/risk/country)
+- (NEW) Validation: har process mein exactly ek "A"
+
+**Tab 2. Service Catalog and Agreements** (5.1.1.1)
+- Service catalog: business service, technical service, service offering, owner, tier, availability hours, pricing model, lifecycle stage, dependencies
+- Agreement manager: SLA (customer), OLA (internal), Underpinning Contract (supplier). Targets, measurement window, business calendar, exclusions, credit/penalty rule
+- (NEW) XLA (experience-level agreement) metrics SLA ke saath, taaki "green SLA, unhappy customer" pakda jaye
+- (NEW) Service dependency map (service → component → supplier) aur impact analysis
+- (NEW) SLA template and clause library, customer-specific override, multi-language
+- (NEW) Service packages/bundles, lifecycle (concept → live → retire), rate card link
+
+**Tab 3. Performance Management** (5.1.1.2)
+- KPI master: name, formula, category, target, amber/red threshold, frequency, owner, data source. Value grid (auto-pull/manual), trend, RAG
+- SLA compliance dashboard (met / at-risk / breached) with breach reason and credit amount
+- (NEW) SLO and error budget per service, burn-rate alerts
+- (NEW) Delivery P&L: revenue, cost, margin %, utilization %, realization % by service/customer/project
+- (NEW) Watermelon check: internal metrics green lekin customer sentiment red wale accounts ki list
+- (NEW) Metric lineage aur data-quality checks (kis source se aaya, kab refresh hua)
+
+**Tab 4. Service Reviews and Reporting** (5.1.1.2)
+- Review calendar: weekly ops review, monthly service review, QBR, executive review. Agenda template, attendees, minutes, actions
+- Report pack builder: auto KPI snapshot + highlights, internal vs customer-facing, approval before publish
+- (NEW) Customer portal view: live SLA, tickets, projects; scheduled export (PDF/PPT)
+- (NEW) Action tracker: owner, due date, ageing, escalation
+- (NEW) AI-drafted variance narrative, human approve karke hi publish
+
+**Tab 5. Development and Direction** (5.1.1.3)
+- Service roadmap (initiative, quarter, owner, dependency), service portfolio view (invest / maintain / retire)
+- CSI register: improvement idea, source (feedback/incident/audit), benefit estimate, effort, priority, status
+- (NEW) Demand-for-change intake, business case, stage-gate, prioritization score (value/effort)
+- (NEW) Benefits realization tracking: initiative close hone ke baad actual benefit vs estimate
+- (NEW) Capability roadmap (skills, tooling, partners) aur innovation/pilot pipeline
+
+**Tab 6. Customer Satisfaction Feedback** (5.1.1.4)
+- Survey designer: CSAT (transactional), CES (effort), NPS (relationship), custom. Trigger rules (ticket closed, milestone done, project complete, QBR), channels (email, in-app, SMS, portal)
+- Response dashboard, verbatim comments, theme tags, sentiment
+- (NEW) Closed-loop workflow: low score ya detractor par auto-case, owner, callback SLA, outcome logged
+- (NEW) Customer health score: configurable weights (adoption, engagement, outcomes, support health, commercial) → RAG, trend, renewal risk
+- (NEW) Survey fatigue control (max surveys per contact per period), sampling, anonymity option, multi-language
+- (NEW) Feedback → CSI register link, voice-of-customer theme report
+
+### BACKEND: Tables
+```
+sd_governance_bodies (id, name, type[steering/service_board/cab/design_authority/risk_committee], charter_doc_id, cadence, chair_id, status, effective_from, effective_to)
+sd_governance_members (id, body_id, employee_id, role, decision_rights_json)
+sd_raci_matrix (id, process_ref, role_type, role_ref, responsibility[R/A/C/I], version, effective_from, country_id (null = global))
+sd_policies (id, name, category, owner_id, version, status, document_id, review_due_date)
+sd_services (id, code, name, service_type[business/technical/offering], parent_service_id, owner_id, tier, availability_hours_json, lifecycle_stage, pricing_model, status)
+sd_agreements (id, agreement_type[sla/ola/uc/xla], customer_id, contract_id, supplier_id, internal_party_id, name, start_date, end_date, calendar_id, version, status, template_id)
+sd_agreement_targets (id, agreement_id, service_id, metric, comparator, target_value, window[monthly/quarterly/rolling], exclusions_json, credit_rule_json, priority)
+sd_sla_measurements (id, agreement_target_id, period_start, period_end, actual_value, status[met/at_risk/breached], breach_reason_id, credit_amount, currency)
+sd_kpis (id, name, formula, category, target, amber_threshold, red_threshold, frequency, owner_id, data_source, status)
+sd_kpi_values (id, kpi_id, period, org_unit_id, customer_id, value, source[manual/auto])
+sd_reviews (id, review_type[ops/service/qbr/exec], customer_id, scheduled_on, agenda_json, minutes_doc_id, status)
+sd_review_actions (id, review_id, action, owner_id, due_date, status, escalated_at)
+sd_report_packs (id, name, audience[internal/customer], template_json, schedule, last_published_at, approval_request_id)
+sd_roadmap_items (id, title, item_type[initiative/capability/retire], quarter, owner_id, status, dependency_json, business_case_id)
+sd_csi_register (id, title, source[feedback/incident/audit/idea], benefit_est, benefit_actual, effort_est, priority_score, owner_id, status)
+sd_surveys (id, name, survey_type[csat/ces/nps/custom], questions_json, trigger_rule_json, channels_json, language_codes, status)
+sd_survey_responses (id, survey_id, customer_id, contact_id, ref_module, ref_id, score, comment, sentiment, theme_tags_json, responded_at)
+sd_feedback_cases (id, response_id, owner_id, due_at, status, outcome, closed_at)
+sd_health_scores (id, customer_id, period, dimension_scores_json, total_score, rag, trend)
+(NEW) sd_control_frameworks (id, name[iso20000/iso27001/soc2/custom], version)
+(NEW) sd_controls (id, framework_id, control_code, description, owner_id, test_frequency, last_tested, result, evidence_doc_id)
+(NEW) sd_maturity_assessments (id, practice, current_level, target_level, assessed_on, assessor_id, findings_json)
+(NEW) sd_decision_log (id, title, context, options_json, decision, owner_id, decided_on, status)
+(NEW) sd_authority_matrix (id, decision_type, role, limit_amount, currency, risk_level, country_id, effective_from)
+(NEW) sd_service_dependencies (id, service_id, depends_on_type, depends_on_id, criticality)
+(NEW) sd_service_packages (id, name, services_json, price, currency, status)
+(NEW) sd_agreement_templates (id, name, clauses_json, language_code, status)
+(NEW) sd_slo (id, service_id, sli_metric, target_pct, window_days, error_budget_remaining_pct, burn_rate)
+(NEW) sd_delivery_pnl (id, period, customer_id, service_id, project_id, revenue, cost, margin_pct, utilization_pct, realization_pct, currency)
+(NEW) sd_health_score_config (id, dimension, weight, rag_rule_json, effective_from)
+(NEW) sd_metric_lineage (id, kpi_id, source_system, last_refreshed_at, dq_status)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/governance/bodies        GET/POST .../bodies/:id/members
+GET/PUT /api/sd/governance/raci               POST .../raci/publish
+GET/POST/PUT /api/sd/governance/policies      GET/POST/PUT .../controls
+GET/POST/PUT /api/sd/services                 GET .../services/:id/dependencies    GET .../services/:id/impact
+GET/POST/PUT /api/sd/agreements               GET/POST/PUT .../agreements/:id/targets
+GET /api/sd/sla/compliance                    POST .../sla/measure (period close)
+GET/POST/PUT /api/sd/kpis                     POST .../kpis/:id/values
+GET/POST/PUT /api/sd/reviews                  GET/POST .../reviews/:id/actions
+GET/POST/PUT /api/sd/report-packs             POST .../report-packs/:id/publish
+GET/POST/PUT /api/sd/roadmap                  GET/POST/PUT .../csi
+GET/POST/PUT /api/sd/surveys                  POST .../surveys/:id/send    POST .../surveys/respond
+GET/PUT /api/sd/feedback/cases                GET /api/sd/customers/:id/health
+(NEW) GET/POST /api/sd/governance/maturity    GET/POST/PUT .../decision-log    GET/PUT .../authority-matrix
+(NEW) GET/POST/PUT /api/sd/slo                GET /api/sd/pnl?by=customer|service|project
+(NEW) GET /api/sd/watermelon-check            GET/PUT /api/sd/health-config
+```
+
+### Core Logic
+1. Har service ek owner aur kam se kam ek active agreement/target se linked hoga. Bina owner ya agreement ke service `live` nahi hogi.
+2. RACI versioned hai. Publish par purana version `effective_to` ho jata hai aur Approval Engine chalta hai.
+3. SLA measurement business calendar se hoti hai (pause/resume rules, exclusions apply). Period close par `sd_sla_measurements` ban jati hain.
+4. SLA breach par credit rule se `credit_amount` calc hota hai aur Finance ko credit-note proposal jata hai (Module 9 financial close).
+5. OLA/UC miss hone par uske upar ke SLA ko "at_risk" flag milta hai (dependency chain se).
+6. KPI RAG config thresholds se hoga, hardcode nahi. KPI values Module 6 (operations) se auto-pull ho sakti hain.
+7. Error budget khatam hone par config ke hisaab se Change freeze flag lagta hai (Module 6 Tab 4 se link).
+8. Customer health score = weighted sum of dimensions (`sd_health_score_config`). Score red hone par account owner ko alert aur QBR agenda mein auto-item.
+9. Watermelon check: service ke saare SLAs green hon lekin health ya CSAT red ho to account flag hota hai.
+10. Survey trigger event se chalta hai (ticket closed, milestone accepted, project complete). Fatigue rule (max N per contact per period) pehle check hota hai.
+11. Closed-loop: score threshold se neeche aate hi `sd_feedback_cases` auto-create, callback SLA ke saath. Case band hone par outcome mandatory.
+12. Report pack publish karne se pehle approval. Customer-facing pack mein internal margin/cost fields kabhi nahi jayenge (field-level class check).
+13. Har change `audit_log` mein.
+
+---
+
+## MODULE 2: Service Delivery Strategy (5.1.2)
+
+### FRONTEND: Screen 2: Service Delivery Strategy (7 tabs)
+
+**Tab 1. Service Delivery Goals** (5.1.2.1)
+- Goals list: goal, type (growth/quality/cost/experience/compliance), linked corporate objective, KPI, target, owner, period, status
+- OKR cascade: Company → Division → Delivery unit, parent-child alignment
+- (NEW) Baseline + benchmark se target-setting, goal conflict view (cost vs quality trade-off)
+- (NEW) Segment-wise goals (strategic vs SMB customers), goal-to-initiative link, weighted roll-up
+
+**Tab 2. Labor Policies** (5.1.2.2)
+- Policy library: overtime, shifts, on-call, rest hours, billable rules, bench policy, utilization targets, subcontractor usage, rate rules
+- Country/entity-wise variants with global default
+- (NEW) Statutory rules engine (max working hours, rest period, night-work rules per country) config se
+- (NEW) Shift pattern and on-call rotation templates, union/works-council consultation tracker
+- (NEW) Contingent-to-employee ratio policy, co-employment/misclassification risk flags
+- (NEW) HR Module 3 ki policies se link (single source, yahan duplicate nahi)
+
+**Tab 3. Resource Availability Evaluation** (5.1.2.3)
+- Supply snapshot: headcount, FTE, skills, utilization, bench, leave, attrition risk, contractors, partners
+- (NEW) Availability heatmap: skill x location x time
+- (NEW) Supply scenarios (hiring lead time, attrition, leave seasonality), build/buy/borrow capacity gap view
+- (NEW) Supplier capacity commitments ka supply mein inclusion
+
+**Tab 4. Delivery Network and Supply Constraints** (5.1.2.4)
+- Delivery network map: delivery centers, hubs, regions, onshore/nearshore/offshore mix, partners, follow-the-sun coverage
+- Constraints register: capacity, regulatory, data residency, language, time zone, work authorization/visa, security clearance, export control, vendor lock-in
+- (NEW) What-if network design (cost vs latency vs risk), cost-to-serve by location
+- (NEW) Customer-wise data residency rules, cross-border tax/permanent-establishment risk flag
+- (NEW) Supplier concentration risk view
+
+**Tab 5. Service Delivery Process** (5.1.2.5)
+- Process library: service line, stages, inputs/outputs, roles, SLAs, controls, methodology (waterfall/agile/hybrid), phase gates, templates
+- (NEW) Visual workflow designer (BPMN-style) jo workflow engine config mein compile hota hai
+- (NEW) Process variants (service line/customer wise), versioning, effective dating
+- (NEW) Process-mining import (designed vs actual), automation candidate scoring
+
+**Tab 6. Procedure Review and Validation** (5.1.2.6)
+- SOP library: version, owner, review cycle, status. Draft → review → validate → approve → publish
+- Validation: walkthrough checklist, dry run/pilot, sign-off by Ops/Legal/Compliance/Security
+- (NEW) SOP attestation by delivery staff, deviation report (SOP vs actual)
+- (NEW) Impact analysis jab process badle (kaun se SOP, runbook, training, SLA affect honge)
+- (NEW) Auto review reminder aur SOP ↔ runbook ↔ training link
+
+**Tab 7. Workplace Layout and Infrastructure** (5.1.2.7)
+- Facility registry: sites, floors, seats, rooms, labs, delivery centers. Seat capacity and utilization
+- Infrastructure standards: laptop, VPN, secure desktop/VDI, tooling stack (service desk, monitoring, collaboration)
+- (NEW) Hybrid seat booking, floor-plan editor, cost per seat
+- (NEW) Secure zone/clean room definition (customer-specific), BCP site pairing
+- (NEW) Workplace request/move workflow, energy/ESG metrics
+
+### BACKEND: Tables
+```
+sd_goals (id, name, goal_type[growth/quality/cost/experience/compliance], parent_goal_id, kpi_id, target, owner_id, period, weight, status, segment_json)
+sd_goal_initiative_links (id, goal_id, roadmap_item_id)
+sd_labor_policies (id, name, category, policy_ref_id (HR policy), applicable_json, country_id, effective_from, status)
+sd_labor_rules (id, country_id, rule_type[max_hours/rest_period/night_work/overtime], rule_json, effective_from)
+sd_shift_patterns (id, name, pattern_json, location_id, status)
+sd_consultations (id, policy_id, body[union/works_council], status, outcome, date)
+sd_supply_snapshots (id, snapshot_date, scope_json, headcount, fte, utilization_pct, bench_pct, attrition_risk_pct)
+sd_supply_scenarios (id, name, assumptions_json, result_json, status)
+sd_delivery_centers (id, name, location_id, center_type[hub/center/partner_site/remote_pool], capacity, languages_json, timezone, status)
+sd_network_links (id, from_center_id, to_center_id, link_type[handover/backup/follow_the_sun], rules_json)
+sd_constraints (id, constraint_type[capacity/regulatory/residency/language/timezone/visa/clearance/export/lockin], scope_json, severity, owner_id, mitigation, status)
+sd_data_residency_rules (id, customer_id, allowed_countries_json, restrictions_json, effective_from)
+sd_process_defs (id, name, service_line_id, methodology, owner_id, status)
+sd_process_versions (id, process_id, version_no, bpmn_json, effective_from, effective_to, approval_request_id)
+sd_sops (id, title, process_id, owner_id, version_no, content_doc_id, review_cycle_days, next_review_date, status)
+sd_sop_reviews (id, sop_id, reviewer_role, status, validation_type[walkthrough/dry_run/pilot], evidence_doc_id, signed_off_at)
+sd_sop_attestations (id, sop_id, employee_id, attested_at, version_no)
+sd_facilities (id, name, location_id, facility_type[site/floor/room/lab/delivery_center], capacity_seats, cost_per_seat, security_zone, status)
+sd_seat_bookings (id, facility_id, resource_id, date, status)
+sd_infra_standards (id, role_type, standard_json, effective_from)
+sd_tooling_stack (id, tool_name, category, owner_id, cost, contract_end, status)
+(NEW) sd_process_mining_imports (id, process_id, imported_at, variance_json, automation_score)
+(NEW) sd_cost_to_serve (id, center_id, service_id, period, cost_per_unit, currency)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/strategy/goals           GET .../goals/tree
+GET/POST/PUT /api/sd/strategy/labor-policies  GET/POST/PUT .../labor-rules   GET/POST/PUT .../shift-patterns
+GET /api/sd/strategy/supply                   POST .../supply/snapshot    GET/POST/PUT .../supply/scenarios
+GET/POST/PUT /api/sd/strategy/centers         GET/POST/PUT .../constraints    GET/POST/PUT .../residency-rules
+POST /api/sd/strategy/network/simulate
+GET/POST/PUT /api/sd/strategy/processes       POST .../processes/:id/publish    GET .../processes/:id/versions
+GET/POST/PUT /api/sd/strategy/sops            POST .../sops/:id/submit    POST .../sops/:id/validate    POST .../sops/:id/attest
+GET/POST/PUT /api/sd/strategy/facilities      POST .../facilities/:id/book    GET/POST/PUT .../infra-standards
+(NEW) GET /api/sd/strategy/processes/:id/impact    POST .../processes/mining-import
+(NEW) GET /api/sd/strategy/cost-to-serve
+```
+
+### Core Logic
+1. Har Goal ek KPI se link hoga aur kam se kam ek initiative se. Child goals ka weighted score parent mein roll-up hota hai.
+2. Labor rule check allocation aur roster dono par chalta hai (Module 4 Tab 3, Module 6 Tab 1). Statutory limit cross hone par block ya warning (config).
+3. Country variant ho to resource ke `work_country` ka rule lagta hai, nahi to global default.
+4. Supply snapshot HR + Time & Attendance se auto-bhara jata hai (monthly + on-demand).
+5. Constraint `severity = high` hone par us scope mein naya allocation ya customer commitment ke liye warning aati hai.
+6. Customer ka data-residency rule resource matching aur tooling selection mein hard filter ban jata hai (resource ya center allowed country mein na ho to match nahi).
+7. Process publish karne par naya version aur purana `effective_to`. Workflow engine naya version uthata hai, chalte instances purane version par rehte hain.
+8. SOP publish ke baad version immutable hai. Edit par naya version, aur delivery staff ko re-attestation request jati hai.
+9. Review due date se pehle owner ko reminder, overdue par escalation.
+10. Process change par impact analysis (linked SOP, runbook, training, SLA) chalta hai aur affected owners ko task jata hai.
+11. Seat booking capacity aur secure-zone eligibility (clearance) check karti hai.
+12. Har change `audit_log` mein.
+
+---
+
+# PART 2: MANAGE SERVICE DELIVERY RESOURCES (5.2)
+
+## MODULE 3: Demand Management and Forecasting (5.2.1)
+
+### FRONTEND: Screen 3: Demand Management (8 tabs)
+
+**Tab 1. Pipeline Monitoring** (5.2.1.1)
+- CRM opportunity sync: stage, probability, value, expected start, skills needed. Weighted vs unweighted view, pipeline ageing
+- Demand from renewals and ongoing contracts, pipeline coverage ratio
+- (NEW) Probability calibration (historical win rate by stage/segment se), softbook vs hardbook
+- (NEW) Opportunity-to-role staffing templates (deal type se auto demand lines)
+
+**Tab 2. Baseline Forecasts** (5.2.1.2)
+- Statistical forecast by service line x skill x location x period. Methods: moving average, exponential smoothing, ETS/ARIMA, ML with seasonality
+- Units: hours / FTE / tickets / revenue
+- (NEW) Hierarchical forecasting (top-down, bottom-up, reconciliation)
+- (NEW) Forecastability score, outlier cleaning, event calendar (launches, holidays, peaks)
+- (NEW) New-service cold start (analog service), champion/challenger models, naive baseline hamesha store (FVA ke liye)
+
+**Tab 3. Customer Collaboration** (5.2.1.3)
+- Customer forecast portal: customers planned volumes/projects submit karte hain. Commitments (min volume), forecast-sharing agreements
+- (NEW) Joint capacity review session, signal confidence per customer
+- (NEW) Change alert: customer ne forecast N% se badla
+- (NEW) Take-or-pay/volume-band link to contract, customer ka apna forecast accuracy score
+
+**Tab 4. Consensus Forecast** (5.2.1.4)
+- Versions side by side: statistical, sales, delivery, customer, finance → consensus. Override with reason and owner, approval, lock window
+- (NEW) FVA per override aur bias flag per override owner
+- (NEW) Scenarios (base/upside/downside), probability-weighted view
+- (NEW) S&OP/IBP-style cycle calendar (data freeze, review, sign-off), consensus vs budget gap
+- "Publish Consensus" Module 4 ko feed karta hai
+
+**Tab 5. Skills Availability for Orders** (5.2.1.5)
+- Demand (current + forecast orders) in skill terms vs supply of skills, by period. Skill gap table
+- (NEW) Skill fungibility/substitution matrix, certification/clearance/language/location constraints
+- (NEW) "Can we deliver this?" feasibility check (sales ke liye capable-to-promise) with earliest start date
+- (NEW) Recommended action: hire / train / borrow / partner
+
+**Tab 6. Monitor Activity and Revise Forecast** (5.2.1.6)
+- Actual vs forecast tracker (weekly/monthly), variance alerts, tracking signal
+- (NEW) Demand sensing from short-term signals (ticket inflow, new bookings)
+- (NEW) Auto re-forecast trigger, revision log with reason code, rolling forecast
+- (NEW) Lag snapshots (M-1, M-3 pe forecast kya tha)
+
+**Tab 7. Evaluate and Revise Forecasting Approach** (5.2.1.7)
+- Model performance league table, method comparison, approach review cycle, decisions (level, horizon, model change)
+- (NEW) Rolling-origin backtesting, FVA by step (naive → statistical → consensus → override)
+- (NEW) Model registry/governance (version, approval, explainability), planning-hierarchy level evaluation
+
+**Tab 8. Forecast Accuracy Measurement** (5.2.1.8)
+- Accuracy KPIs: WAPE, MAPE, sMAPE, bias (MPE), RMSE, tracking signal, by horizon/lag, version, segment. Heatmap and trend
+- (NEW) FVA waterfall, accuracy by owner/customer/skill
+- (NEW) Targets and traffic lights config se, root-cause tags for big misses
+- (NEW) Forecast stability (WCOV) aur negative-FVA overrides ki list
+
+### BACKEND: Tables
+```
+sd_pipeline_opportunities (id, crm_ref, customer_id, stage, probability, value, currency, expected_start, duration_weeks, skills_json, deal_type, book[hard/soft], synced_at)
+sd_demand_signals (id, source[pipeline/renewal/contract/customer/sensing], customer_id, service_id, skill_id, period, quantity, uom, confidence_pct)
+sd_staffing_templates (id, deal_type, roles_json, effective_from, status)
+sd_forecast_models (id, name, method, params_json, hierarchy_level, version, is_champion, status)
+sd_forecast_cycles (id, name, period_from, period_to, data_freeze_date, review_date, signoff_date, status)
+sd_forecast_versions (id, cycle_id, version_type[naive/statistical/sales/delivery/customer/finance/consensus], scenario[base/upside/downside], model_id, status[draft/submitted/approved/locked], approval_request_id)
+sd_forecast_lines (id, version_id, period, service_line_id, skill_id, location_id, customer_id, quantity, uom, conf_low, conf_high)
+sd_forecast_overrides (id, line_id, old_value, new_value, reason_code_id, owner_id, fva_impact)
+sd_customer_forecasts (id, customer_id, period, volume, project_refs_json, submitted_by, submitted_at, status)
+sd_customer_commitments (id, customer_id, contract_id, min_volume, uom, band_json, period)
+sd_forecast_events (id, name, event_type[launch/holiday/peak/freeze], date_from, date_to, uplift_pct)
+sd_forecast_actuals (id, period, service_line_id, skill_id, location_id, customer_id, actual_qty, uom)
+sd_forecast_accuracy (id, version_id, period, horizon_lag, segment_json, wape, mape, smape, bias, rmse, fva_pct)
+sd_forecast_revisions (id, from_version_id, to_version_id, reason_code_id, triggered_by[manual/auto], created_at)
+sd_model_backtests (id, model_id, origin_start, folds, metrics_json, run_at)
+sd_skill_fungibility (id, skill_id, substitute_skill_id, coverage_pct, evidence_source)
+sd_feasibility_checks (id, requested_by, opportunity_id, demand_json, result_json, earliest_start, status)
+sd_accuracy_thresholds (id, metric, segment, green_max, amber_max, effective_from)
+```
+
+### BACKEND: APIs
+```
+GET/POST /api/sd/demand/pipeline            POST .../pipeline/sync
+GET/POST/PUT /api/sd/demand/signals         GET/POST/PUT .../staffing-templates
+GET/POST/PUT /api/sd/demand/models          POST .../models/:id/run    POST .../models/:id/backtest
+GET/POST/PUT /api/sd/demand/cycles          GET/POST/PUT .../versions    POST .../versions/:id/submit|approve|lock
+GET/PUT /api/sd/demand/versions/:id/lines   POST .../lines/:id/override
+GET/POST /api/sd/demand/customer-forecasts  GET/POST/PUT .../customer-commitments
+GET /api/sd/demand/skill-gap?period=X       GET/PUT .../fungibility
+POST /api/sd/demand/feasibility             GET .../feasibility/:id
+GET /api/sd/demand/tracking                 POST .../revise
+GET /api/sd/demand/accuracy                 GET .../accuracy/fva    GET/PUT .../accuracy/thresholds
+POST /api/sd/demand/consensus/publish
+```
+
+### Core Logic
+1. Weighted pipeline demand = value/hours x calibrated probability, `staffing_templates` se role-wise lines. Hardbook (signed) alag, softbook (pipeline) alag dikhte hain.
+2. Naive baseline aur statistical forecast hamesha save hote hain, taaki FVA nikal sake.
+3. Consensus version = statistical + approved overrides. Har override ka reason mandatory, aur lock date ke baad override block.
+4. FVA = naive error - step error. Negative FVA lagatar aaye to owner ko review flag.
+5. Accuracy metrics: WAPE = sum(|actual - forecast|) / sum(actual). Bias = sum(forecast - actual) / sum(actual). Dono dikhte hain, kyunki absolute error bias chhupa deta hai.
+6. Accuracy horizon/lag-wise store hota hai (jis lag par forecast liya tha, usi lag ke forecast se compare).
+7. Customer forecast aur contract commitment mismatch par alert. Variance volume-band se bahar ho to commercial team ko notification.
+8. Feasibility check: demand skills vs supply (booked + available + fungible substitutes), constraints (clearance, language, location). Output earliest start date + shortfall + recommended action.
+9. Actual vs forecast variance threshold cross karne par auto re-forecast trigger (config) aur revision `sd_forecast_revisions` mein.
+10. Model change/approval versioned hai. Naya model champion banne se pehle backtest mandatory.
+11. Published consensus Module 4 (resource plan) ko feed karta hai, aur HR WFP (HR Module 2) ko long-horizon input deta hai.
+12. Har forecast, override aur model run `audit_log` mein.
+
+---
+
+## MODULE 4: Resource Planning (5.2.2)
+
+### FRONTEND: Screen 4: Resource Planning (6 tabs)
+
+**Tab 1. Skills Taxonomy** (5.2.2.1)
+- Skills library (HR Module 4 ki table reuse): hierarchy (taxonomy) + relations (related, prerequisite, substitutable, adjacent) = ontology. Proficiency scale 1-5 with indicators
+- Resource skill profile: skill, level, source (self/manager/inferred/certification/assessment), evidence, last used, expiry
+- (NEW) Skills inference from timesheets, project history, certifications, tickets
+- (NEW) Skill decay/refresh rules, certification expiry
+- (NEW) New-skill proposal workflow (governance), merge/dedupe tool, multi-language, external ontology import (ESCO/O*NET type)
+- (NEW) Skill demand index (forecast se kaun si skill hot hai)
+
+**Tab 2. Create Resource Plan** (5.2.2.2)
+- Plan by period/horizon: demand lines (consensus forecast + signed projects + pipeline) vs supply lines, by service line/BU/customer/project
+- Versions and scenarios, "Submit Plan"
+- (NEW) Baseline lock, revised plan alag
+- (NEW) Cost and margin projection, utilization targets by role/grade
+- (NEW) Plan se auto requests: hire / train / contractor / partner
+- (NEW) HR WFP link: headcount plan yahan ka input, short-term plan uska output
+
+**Tab 3. Match Demand with Capacity, Skills and Capabilities** (5.2.2.3)
+- Resource request board (role, skills, level, dates, % allocation, location, language, clearance) vs candidate list with match score. Soft/hard booking, drag-drop allocation
+- Overallocation and conflict detection, leave/holiday-aware
+- (NEW) Auto-scheduling optimizer (constraint solver: skills, availability, cost, preference, travel, fairness) with what-if
+- (NEW) Internal marketplace: resources khud nominate kar sakte hain
+- (NEW) Customer-approved named-resource flow, utilization impact preview, partial/shadow allocations
+
+**Tab 4. Suppliers and Partners** (5.2.2.4)
+- Supplier/partner directory: capability profile (skills, rates, capacity), preferred vendor list, rate cards, ratings
+- RFQ/capacity request to suppliers, submissions, selection, PO request
+- (NEW) VMS features: tiered vendor waterfall routing, supplier submissions, onboarding checks (work authorization, background, NDA)
+- (NEW) Supplier performance scorecard, diversity tracking, subcontractor compliance (insurance, certifications)
+
+**Tab 5. Critical Resources and Supplier Capacity** (5.2.2.5)
+- Critical resource register: scarce skills, key-person dependency, single points of failure, criticality score, backup/successor
+- Supplier capacity commitments vs utilization
+- (NEW) Concentration risk (ek supplier X% se zyada capacity), key-person risk alerts
+- (NEW) HR attrition-risk link (HR guide se), cross-training plan, capacity reservation blocks with suppliers
+
+**Tab 6. Monitor and Manage Capacity and Availability** (5.2.2.6)
+- Capacity dashboard: utilization (billable vs target), bench, overallocation, availability calendar, leave, booked vs forecast
+- (NEW) Real-time availability from T&A/timesheets, roll-off planning (30/60/90 days)
+- (NEW) Shortfall alerts (N weeks aage), rebalancing suggestions, planned vs actual allocation variance
+- (NEW) Overwork/burnout risk flag (working-hours policy se), bench management
+
+### BACKEND: Tables
+```
+sd_skill_ext (id, skill_id, skill_type[technical/domain/functional/soft/certification], decay_months, is_certification, demand_index, status)
+sd_resource_skills (id, resource_id, skill_id, proficiency, source[self/manager/inferred/certification/assessment], evidence_json, verified_by, last_used_on, expires_on)
+sd_certifications (id, resource_id, certification_name, issuer, issued_on, expires_on, document_id, status)
+sd_skill_proposals (id, name, definition, proposed_by, status, merged_into_skill_id)
+sd_resource_plans (id, name, period_from, period_to, scenario, version, forecast_version_id, org_unit_id, status[draft/submitted/approved/revised], is_baseline, currency)
+sd_resource_plan_lines (id, plan_id, service_line_id, skill_id, location_id, period, demand_fte, supply_fte, gap_fte, cost, margin)
+sd_resource_requests (id, project_id, plan_line_id, role, skills_json, level, start_date, end_date, alloc_pct, location_id, language_code, clearance, booking_type[soft/hard], status, requested_by)
+sd_allocations (id, resource_id, project_id, request_id, start_date, end_date, alloc_pct, bill_rate, cost_rate, currency, status[proposed/confirmed/active/ended], customer_approved)
+sd_match_scores (id, request_id, resource_id, score, breakdown_json, computed_at)
+sd_scheduling_runs (id, scope_json, constraints_json, result_json, run_by, run_at, status)
+sd_supplier_capabilities (id, supplier_id, skill_id, capacity_fte, rate, currency, rating)
+sd_capacity_requests (id, request_id, supplier_ids_json, status[open/submitted/selected/closed], po_ref)
+sd_supplier_submissions (id, capacity_request_id, supplier_id, candidate_json, rate, status)
+sd_supplier_compliance (id, supplier_id, check_type[insurance/background/nda/work_auth/cert], valid_until, status)
+sd_supplier_scorecards (id, supplier_id, period, quality, delivery, responsiveness, compliance, overall)
+sd_supplier_capacity_commitments (id, supplier_id, skill_id, period, committed_fte, used_fte, reserved_block)
+sd_critical_resources (id, resource_id/skill_id, criticality_score, spof_flag, backup_resource_id, mitigation, status)
+sd_capacity_snapshots (id, period, scope_json, available_hrs, booked_hrs, utilization_pct, bench_pct, over_allocated_count)
+sd_utilization_targets (id, job_profile_id, grade_id, target_pct, effective_from)
+sd_rolloff_alerts (id, resource_id, allocation_id, roll_off_date, status)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/skills                  POST .../skills/merge    GET/POST/PUT .../skills/proposals
+GET/PUT /api/sd/resources/:id/skills         POST .../resources/:id/skills/infer    GET/POST .../resources/:id/certifications
+GET/POST/PUT /api/sd/resource-plans          POST .../resource-plans/:id/submit|revise|lock-baseline
+GET/POST/PUT /api/sd/resource-requests       GET .../resource-requests/:id/matches
+GET/POST/PUT /api/sd/allocations             POST .../allocations/:id/confirm    POST .../scheduling/optimize
+GET/POST/PUT /api/sd/suppliers               GET/POST/PUT .../suppliers/:id/capabilities
+POST /api/sd/capacity-requests               POST .../capacity-requests/:id/select
+GET/POST/PUT /api/sd/suppliers/:id/compliance    GET .../suppliers/:id/scorecard
+GET/POST/PUT /api/sd/critical-resources      GET /api/sd/resources/concentration-risk
+GET /api/sd/capacity/dashboard               GET .../capacity/rolloffs    GET .../capacity/shortfall
+```
+
+### Core Logic
+1. Skills ek hi table se aati hain (HR Module 4). Merge par saare resource skills, job profile skills aur requests naye skill par re-point hote hain, history rehti hai.
+2. Skill proficiency ka source aur evidence save hota hai. Assessment/certification se verify hui skill ka weight self-declared se zyada.
+3. Skill `expires_on`/decay ke baad level auto-"unverified" ho jata hai aur resource + manager ko refresh reminder.
+4. Match score = weighted(skill fit, proficiency, availability, location/timezone, language, clearance, cost, preference, fungible-skill bonus). Weights config mein.
+5. Hard constraints (clearance, work authorization, data residency, statutory hours) pehle filter hote hain. Score sirf eligible candidates par.
+6. Overallocation = sum of alloc_pct > 100% (ya policy limit) ki dates par block/warning. Leave aur holiday calendar se availability nikalti hai.
+7. Customer-approval required wali allocation `customer_approved = true` hone tak `confirmed` nahi hoti.
+8. Approved plan baseline lock hota hai. Revised plan alag version, aur reason mandatory.
+9. Plan gap positive ho to action request (hire/train/contract/partner) generate hoti hai: hire HR requisition (HR Module 8) ko, contractor/partner Tab 4 ko.
+10. Supplier submission accept hone se pehle `sd_supplier_compliance` valid hona chahiye, warna block.
+11. Concentration risk: koi supplier ya key person config threshold se upar ho to alert aur mitigation task.
+12. Roll-off alert 90/60/30 din pehle, taaki next assignment ya bench plan ban sake.
+13. Har allocation/plan change `audit_log` mein.
+
+---
+
+## MODULE 5: Resource Enablement and Training (5.2.3)
+
+### FRONTEND: Screen 5: Resource Enablement (7 tabs)
+
+**Tab 1. Training Plan** (5.2.3.1)
+- Training needs analysis: source (skill gap, new service launch, compliance, customer mandate), plan by role/service/customer, budget, priority, mandatory vs developmental
+- (NEW) Auto-needs from forecast skill gap (Module 3 Tab 5) aur HR competency/training-needs (HR guide)
+- (NEW) Certification roadmap per role, customer-mandated training (customer-specific onboarding/security), cost-benefit
+
+**Tab 2. Training Materials** (5.2.3.2)
+- Content library: courses, labs, videos, docs, assessments, authoring, versioning, localization
+- (NEW) SCORM/xAPI/LTI support, hands-on lab/sandbox provisioning
+- (NEW) AI-assisted content draft from SOPs/runbooks/knowledge articles (human review), content approval workflow, learning paths
+
+**Tab 3. Training Schedule** (5.2.3.3)
+- Session calendar: trainer, room/virtual link, capacity, enrollments, waitlist, conflicts
+- (NEW) Schedule-around-allocations: billable resource ko peak mein na kheencho, conflict warning
+- (NEW) Cohort management, trainer capacity, venue/travel cost, reminders, attendance capture, vendor-delivered sessions
+
+**Tab 4. Operations Training** (5.2.3.4)
+- Ops onboarding tracker: process, tools, SLAs, escalation, customer-specific knowledge. Buddy/shadowing, sign-off
+- (NEW) Nesting stages: shadow → supervised → independent, ramp curves
+- (NEW) "Ready-to-work" gate: certify hone tak queue/customer par allocate nahi
+- (NEW) Simulation/role-play, customer-specific knowledge sign-off
+
+**Tab 5. Technical Training** (5.2.3.5)
+- Technical curricula (platform, cloud, security, domain), vendor certification tracking (voucher, exam date, result), labs, coaching
+- (NEW) Certification expiry and renewal alerts
+- (NEW) Partner-tier requirement tracker (partner program ko N certified log chahiye), learning hours/budget per person
+
+**Tab 6. Skill and Capability Testing** (5.2.3.6)
+- Assessments: quiz, practical lab, case, simulation, manager/peer. Proficiency scoring, test bank, pass thresholds
+- (NEW) Adaptive tests, proctoring/anti-cheat, retest policy
+- (NEW) Result se `sd_resource_skills` verified update, team/service capability maturity test, auditor-ready evidence
+
+**Tab 7. Training Effectiveness** (5.2.3.7)
+- Kirkpatrick levels 1-4: reaction, learning, behavior, results. Pre/post assessment
+- Impact on KPIs (first-contact resolution, handle time, CSAT, defects, ramp time), ROI
+- (NEW) Control group comparison, time-to-productivity, trainer rating
+- (NEW) Min-group-size masking (chhote groups ka individual data nahi), recommended actions
+
+### BACKEND: Tables
+```
+sd_training_needs (id, source[skill_gap/launch/compliance/customer/audit], skill_id, role_ref, population_json, priority, status)
+sd_training_plans (id, name, period, budget, currency, owner_id, status, approval_request_id)
+sd_training_plan_items (id, plan_id, need_id, course_id, target_count, due_date, cost, status)
+sd_courses (id, title, type[course/lab/video/doc/assessment], skill_ids_json, duration_min, language_code, owner_id, status, current_version_id)
+sd_course_versions (id, course_id, version_no, content_ref, standard[scorm/xapi/lti/native], approved_by, effective_from)
+sd_learning_paths (id, name, role_ref, courses_json, status)
+sd_training_sessions (id, course_id, trainer_id, start_at, end_at, mode[onsite/virtual/vendor], venue_ref, capacity, cost, status)
+sd_training_enrollments (id, session_id, resource_id, status[enrolled/waitlist/attended/no_show/completed], completed_at, score)
+sd_ramp_programs (id, role_ref, customer_id, stages_json, ready_gate_rule_json)
+sd_ramp_progress (id, resource_id, program_id, current_stage[shadow/supervised/independent], signed_off_by, signed_off_at)
+sd_assessments (id, name, assess_type[quiz/lab/case/simulation/peer], skill_id, pass_score, retest_policy_json, proctored, status)
+sd_assessment_questions (id, assessment_id, question_json, difficulty, status)
+sd_assessment_attempts (id, assessment_id, resource_id, score, passed, proctor_flags_json, taken_at)
+sd_training_evaluations (id, enrollment_id/course_id, kirkpatrick_level, metric, pre_value, post_value, control_value, period)
+sd_training_roi (id, plan_id, cost, benefit_est, roi_pct, method)
+(NEW) sd_partner_requirements (id, partner_program, cert_name, required_count, current_count, due_date)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/training/needs           POST .../needs/generate (from skill gap)
+GET/POST/PUT /api/sd/training/plans           POST .../plans/:id/submit
+GET/POST/PUT /api/sd/training/courses         GET .../courses/:id/versions    POST .../courses/:id/publish
+GET/POST/PUT /api/sd/training/paths
+GET/POST/PUT /api/sd/training/sessions        POST .../sessions/:id/enroll    PUT .../enrollments/:id/attend
+GET/POST/PUT /api/sd/training/ramp-programs   PUT .../ramp-progress/:id/advance
+GET/POST/PUT /api/sd/training/assessments     POST .../assessments/:id/attempt
+GET /api/sd/training/certifications/expiring  GET/POST/PUT .../partner-requirements
+GET /api/sd/training/effectiveness            GET .../effectiveness/roi
+```
+
+### Core Logic
+1. Training need auto-generate hota hai jab skill gap (Module 3) ya naya service launch (Module 6 startup) ya compliance expiry detect ho.
+2. Schedule karte waqt allocation calendar check hota hai. Billable allocation ke saath conflict ho to warning ya manager approval (config).
+3. Ready-to-work gate: ramp program ke stages aur sign-off complete hone tak resource ko customer/queue allocation par `confirmed` nahi milti.
+4. Assessment pass hone par `sd_resource_skills` mein proficiency `verified` ho jati hai (source = assessment).
+5. Proctoring flags aaye to attempt manual review mein jata hai.
+6. Certification expiry se 90/60/30 din pehle resource + manager ko alert. Expiry ke baad us skill par critical allocations par warning.
+7. Effectiveness: pre/post aur KPI delta calc hota hai, jahan control group ho wahan uske against. ROI = (benefit - cost) / cost.
+8. Min-group-size rule: chhote group ka effectiveness individual-level data mask hota hai.
+9. HR LMS connected ho to enrollments/completions dono taraf sync, warna module standalone chalta hai.
+10. Customer-mandated training complete hone tak us customer ke project par resource ka access request pending.
+11. Har course publish/test result `audit_log` mein.
+
+---
+
+# PART 3: MANAGE AND OPERATE SERVICE DELIVERY SYSTEM (5.3)
+
+## MODULE 6: Service Delivery System Operations (5.3)
+
+### FRONTEND: Screen 6: Service Delivery Operations (5 tabs)
+
+**Tab 1. System Planning** (5.3.1)
+- Workload forecast to staffing requirement by interval, shift roster planning, operating-model config, tooling/infra capacity, freeze-period calendar
+- (NEW) WFM: required staff by interval (queueing-based), roster generator, intraday adjustments, shrinkage (leave, training, breaks) config
+- (NEW) Dependency and readiness checklist, capacity thresholds (tools/infra)
+
+**Tab 2. System Startup** (5.3.2)
+- Operational Readiness Review (ORR) checklist: people trained, tools configured, runbooks ready, SLAs loaded, monitoring on, access, DR. Cutover plan, pilot, hypercare
+- (NEW) Auto readiness score, go/no-go gate with approvals, rollback plan
+- (NEW) Staged rollout (pilot → region → full), early-life-support KPI tracking
+
+**Tab 3. Operate: Command Center** (5.3.3)
+- Unified work queue: incidents, service requests, orders, tasks. Routing rules (skills, load, priority, SLA), SLA timers, wallboard, shift handover, on-call rotation, escalation matrix
+- (NEW) Omnichannel intake (email, portal, chat, API, phone), customer-specific queues and instructions
+- (NEW) AI triage: classification, priority, suggested resolution (human in loop)
+- (NEW) Swarming, follow-the-sun handover, fair-assignment, backlog ageing, workflow automation rules
+
+**Tab 4. Incident, Problem, Change and Release** (5.3.3)
+- Incident: severity matrix, major incident process (war room, comms templates, status page), post-incident review
+- Problem: RCA, known-error DB. Change enablement: standard/normal/emergency, risk score, CAB, change calendar. Release tracking
+- (NEW) Change risk scoring, collision detection, blackout windows
+- (NEW) Blameless PIR with action items, customer-facing status page
+- (NEW) Error-budget based release freeze, CMDB impact link
+
+**Tab 5. Service Assurance** (5.3.4)
+- QA scorecards (sampled work review), calibration, internal/customer/regulatory audits, findings, corrective actions (CAPA)
+- Service health and availability dashboard, SLA credit calculation, continuity plans (BCP/DR) and tests (RTO/RPO)
+- (NEW) Continuous controls monitoring (automated control tests), auto-sampling
+- (NEW) Supplier assurance (OLA/UC monitoring), assurance score per service
+
+### BACKEND: Tables
+```
+sd_workload_forecasts (id, queue_id, interval_start, volume, aht_sec, source_forecast_version_id)
+sd_staffing_requirements (id, queue_id, interval_start, required_staff, shrinkage_pct, calc_method)
+sd_rosters (id, period, team_id, status, published_at) / sd_shifts (id, roster_id, resource_id, start_at, end_at, shift_type, status)
+sd_freeze_calendar (id, name, date_from, date_to, scope_json, reason)
+sd_readiness_checklists (id, scope_type[system/project/service], scope_id, template_id, score, status)
+sd_readiness_items (id, checklist_id, item, owner_id, due_date, status, evidence_doc_id, is_blocker)
+sd_go_live_gates (id, scope_ref, gate_name, criteria_json, decision[go/no_go/conditional], approval_request_id, decided_at, rollback_plan_doc_id)
+sd_rollout_stages (id, scope_ref, stage[pilot/region/full], start_date, exit_criteria_json, status)
+sd_work_queues (id, name, service_id, customer_id, skills_json, routing_rule_id, calendar_id, status)
+sd_work_items (id, item_no, item_type[incident/request/order/task], customer_id, service_id, queue_id, priority, severity, channel, status, assignee_id, opened_at, due_at, resolved_at, closed_at, parent_id, ci_id, classification_json, ai_suggestion_id)
+sd_work_item_events (id, work_item_id, event_type, actor_id, from_value, to_value, at)
+sd_sla_timers (id, work_item_id, agreement_target_id, started_at, paused_total_sec, due_at, breached_at, status[running/paused/met/breached])
+sd_routing_rules (id, name, conditions_json, strategy[skill/load/round_robin/priority], priority_order, status)
+sd_escalation_matrix (id, service_id, severity, level, role_ref, after_minutes)
+sd_oncall_rotations (id, team_id, schedule_json, status) / sd_handover_notes (id, from_shift_id, to_shift_id, notes, open_items_json)
+sd_major_incidents (id, work_item_id, commander_id, war_room_ref, comms_log_json, started_at, resolved_at, customer_impact_json)
+sd_problems (id, title, linked_incidents_json, root_cause, rca_method, owner_id, status)
+sd_known_errors (id, problem_id, workaround, article_id, status)
+sd_changes (id, change_no, change_type[standard/normal/emergency], service_id, risk_score, plan_doc_id, backout_plan, scheduled_start, scheduled_end, status, approval_request_id)
+sd_change_calendar_conflicts (id, change_id, conflicting_change_id, type)
+sd_releases (id, release_no, change_ids_json, environment, status, deployed_at)
+sd_pirs (id, ref_type, ref_id, summary, contributing_factors_json, actions_json, status)
+sd_qa_scorecards (id, name, criteria_json, effective_from) / sd_qa_reviews (id, scorecard_id, work_item_id, reviewer_id, score, comments, calibrated)
+sd_audits (id, audit_type[internal/customer/regulatory], scope, auditor, date, status) / sd_audit_findings (id, audit_id, severity, finding, owner_id, due_date, status)
+sd_capa (id, source_ref, action, owner_id, due_date, effectiveness_check, status)
+sd_continuity_plans (id, service_id, rto_min, rpo_min, plan_doc_id, last_tested, status) / sd_dr_tests (id, plan_id, test_date, result, findings_json)
+sd_service_health (id, service_id, ts, availability_pct, status, source)
+sd_status_page_events (id, service_id, event_type, message, started_at, resolved_at, visibility[internal/customer])
+(NEW) sd_control_tests (id, control_id, run_at, result, evidence_ref, automated)
+```
+
+### BACKEND: APIs
+```
+GET/POST /api/sd/ops/workload-forecast       POST .../staffing/calculate    GET/POST/PUT .../rosters    POST .../rosters/:id/publish
+GET/POST/PUT /api/sd/ops/freeze-calendar
+GET/POST/PUT /api/sd/ops/readiness           POST .../readiness/:id/score    POST .../go-live/:id/decide
+GET/POST/PUT /api/sd/ops/queues              GET/POST/PUT .../routing-rules    GET/POST/PUT .../escalation-matrix
+GET/POST/PUT /api/sd/ops/work-items          POST .../work-items/:id/assign|escalate|resolve|close|pause|resume
+GET /api/sd/ops/wallboard                    GET/POST /api/sd/ops/handover    GET/POST/PUT .../oncall
+POST /api/sd/ops/work-items/ingest (email/chat/API intake)
+POST /api/sd/ops/incidents/:id/declare-major     GET/POST .../problems    GET/POST .../known-errors
+GET/POST/PUT /api/sd/ops/changes             POST .../changes/:id/submit|approve|implement|close    GET .../changes/calendar
+GET/POST /api/sd/ops/releases                GET/POST /api/sd/ops/pirs
+GET/POST/PUT /api/sd/assurance/qa-scorecards     POST .../qa-reviews    GET/POST/PUT .../audits    GET/POST .../capa
+GET/POST/PUT /api/sd/assurance/continuity    POST .../continuity/:id/test    GET /api/sd/assurance/service-health
+GET/POST /api/sd/status-page
+```
+
+### Core Logic
+1. Staffing requirement workload forecast (Module 3 consensus + intraday pattern) se nikalta hai: required staff = f(volume, AHT, service-level target, shrinkage). Roster us par optimize hota hai aur labor rules (Module 2) enforce hote hain.
+2. Go-live gate tabhi "go" ho sakta hai jab saare `is_blocker` readiness items complete hon aur readiness score threshold se upar ho. Conditional go mein conditions + owner + due date mandatory.
+3. Work item intake par routing rule chalta hai: skills + load + priority + SLA remaining. Customer-specific queue ho to sirf us customer ke trained/cleared resources.
+4. SLA timer agreement target se start hota hai, business calendar se chalta hai. Pause/resume sirf allowed reasons (jaise "waiting on customer") par, aur har pause logged.
+5. Timer 75%/90% par at-risk alert, 100% par breach, aur Module 1 ka `sd_sla_measurements` auto-update.
+6. Severity matrix se major incident auto-suggest hota hai. Major incident declare hone par war room, comms template, status page event, aur escalation matrix ek saath chalte hain.
+7. Problem tabhi close hota hai jab root cause aur known error/permanent fix link ho. Repeat incidents par problem auto-suggest.
+8. Change risk score = f(service criticality, change type, past failure rate, window, dependency count). Collision detection same CI/service ke overlapping changes par.
+9. Freeze calendar ya error budget exhausted ho to normal changes block, emergency change sirf CAB-emergency approval se.
+10. AI triage sirf suggestion hai (`ai_suggestions`). Auto-apply tabhi jab confidence threshold aur low-risk category config mein allowed ho.
+11. QA sampling rule config se (per agent, per queue, new-joiner pe zyada). Calibration sessions mein reviewers ka score variance track hota hai.
+12. Audit finding par CAPA mandatory, aur effectiveness check ke baad hi band.
+13. DR test due date se pehle reminder. Failed test par finding auto-create.
+14. Har work item event aur change `audit_log` / `sd_work_item_events` mein.
+
+---
+
+# PART 4: DELIVER SERVICE TO CUSTOMER (5.4)
+
+## MODULE 7: Initiate Service Delivery (5.4.1)
+
+### FRONTEND: Screen 7: Service Initiation (6 tabs)
+
+**Tab 1. Contract and Terms Review** (5.4.1.1)
+- Deal-to-delivery handover: contract summary, scope, billing model, rate card, SLAs, milestones, penalties, termination, data/security clauses, liability caps, auto-renew
+- Obligation tracker: obligation → owner → due date → evidence
+- (NEW) AI obligation extraction from contract text (human verify)
+- (NEW) Non-standard term deviation flag, joint review (Legal/Finance/Delivery), amendment/change-order versions
+- (NEW) Performance obligation identification (distinct deliverables) revenue recognition ke liye
+
+**Tab 2. Customer Requirements and Business Objectives** (5.4.1.2, 5.4.1.4)
+- Requirements capture: functional/non-functional, constraints, assumptions, acceptance criteria. Approach definition/refinement (methodology, phases, team shape, tooling)
+- Customer business objectives: goals, success metrics, value drivers, stakeholders, executive sponsor
+- (NEW) Outcome-based success metrics contract se linked
+- (NEW) Stakeholder map and communication plan, requirement ↔ deliverable traceability matrix, discovery workshop templates
+
+**Tab 3. Project Plan Revision and Approval** (5.4.1.3)
+- Plan: WBS, schedule (dependencies, critical path), milestones, budget (cost, revenue, margin), baseline. Revise and approve via workflow
+- (NEW) Baseline versions (v1, v2) with variance, margin guardrail (threshold se kam margin par higher approval)
+- (NEW) Bottom-up estimate from rate card, analogous estimate from past projects, risk-adjusted contingency
+- (NEW) Plan templates by service type, resource-loaded schedule, what-if
+
+**Tab 4. Environmental Readiness** (5.4.1.5)
+- Readiness checklist: customer environment (access, VPN, accounts, clearances, tools, data, sandbox), delivery environment (tooling, licenses, workspace), legal readiness (NDA, DPA, background checks), site readiness
+- (NEW) Customer-side tasks with due dates; delay hone par clock stop/SLA exclusion aur delay log (change order evidence)
+- (NEW) Access provisioning requests (IAM link), readiness score, gates with owner
+
+**Tab 5. Resource Assignment** (5.4.1.6, 5.4.1.6.1, 5.4.1.6.2)
+- Identify, select, assign resources (Module 4 matching board embedded), named-resource customer approval, project onboarding
+- People objectives (5.4.1.6.1): per-assignment goals, KPIs, development goals, utilization/billing targets, HR performance module se link
+- Engagement rules (5.4.1.6.2): communication norms, working hours/time-zone overlap, escalation, site conduct, security/confidentiality, change process, approval authority, time and billing rules
+- (NEW) Engagement rule templates by customer, e-acknowledgement by resources, rule-compliance monitoring, project RACI
+
+**Tab 6. Plan for Service Delivery** (5.4.1.7)
+- Service Delivery Plan: governance, RAID, communication, quality, risk, change control, acceptance, transition plan, KPIs/SLAs
+- Kickoff meeting and checklist
+- (NEW) Auto-assemble SDP from previous tabs, quality gates, risk quantification (probability x impact = contingency)
+- (NEW) Customer sign-off of plan, delivery calendar integration
+
+### BACKEND: Tables
+```
+sd_deal_handovers (id, opportunity_id, contract_id, handover_doc_id, sales_owner_id, delivery_owner_id, status, completed_at)
+sd_contract_reviews (id, contract_id, reviewer_role[legal/finance/delivery/security], findings_json, deviation_flags_json, status, signed_off_at)
+sd_contract_obligations (id, contract_id, clause_ref, obligation_text, obligation_type[deliverable/sla/reporting/security/payment/other], owner_id, due_date, evidence_doc_id, status, source[manual/ai], verified_by)
+sd_performance_obligations (id, contract_id, name, standalone_price, allocation_pct, recognition_method[over_time_pct/milestone/point_in_time/ratable/t_and_m], status)
+sd_requirements (id, project_id, req_type[functional/non_functional/constraint/assumption], text, priority, acceptance_criteria, status, source_ref)
+sd_requirement_links (id, requirement_id, link_type[objective/deliverable/design/test], link_id)
+sd_customer_objectives (id, project_id, customer_id, objective, success_metric, target, contract_clause_ref, status)
+sd_stakeholders (id, project_id, contact_id, role, influence, interest, comms_pref_json)
+sd_approaches (id, project_id, methodology, phases_json, team_shape_json, tooling_json, version, status)
+sd_project_plans (id, project_id, version_no, is_baseline, start_date, end_date, budget_cost, budget_revenue, margin_pct, contingency, status, approval_request_id)
+sd_wbs_tasks (id, plan_id, parent_id, name, owner_id, start_date, end_date, effort_hrs, predecessor_json, is_milestone, weight)
+sd_milestones (id, plan_id, name, due_date, billing_amount, acceptance_required, status)
+sd_plan_estimates (id, plan_id, method[bottom_up/analogous/parametric], lines_json, risk_contingency_pct, source_project_ids_json)
+sd_people_objectives (id, allocation_id, objective, kpi, target, development_goal, hr_goal_ref, status)
+sd_engagement_rules (id, project_id, customer_id, template_id, rules_json, version, effective_from, status)
+sd_engagement_rule_acks (id, rule_id, resource_id, acknowledged_at, version)
+sd_delivery_plans (id, project_id, version_no, sections_json, customer_signoff_at, status)
+sd_raid_items (id, project_id, item_type[risk/assumption/issue/dependency], description, probability, impact, exposure, owner_id, mitigation, status)
+sd_kickoffs (id, project_id, scheduled_on, attendees_json, checklist_json, minutes_doc_id, status)
+sd_customer_tasks (id, project_id, readiness_item_id, task, due_date, status, delay_days, clock_stop)  -- readiness items sd_readiness_items (Module 6) reuse, scope_type = project
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/initiate/handovers         GET/POST/PUT .../contract-reviews
+GET/POST/PUT /api/sd/initiate/obligations       POST .../obligations/extract    GET/POST/PUT .../performance-obligations
+GET/POST/PUT /api/sd/initiate/requirements      GET .../requirements/traceability?project=X
+GET/POST/PUT /api/sd/initiate/objectives        GET/POST/PUT .../stakeholders    GET/POST/PUT .../approaches
+GET/POST/PUT /api/sd/initiate/plans             POST .../plans/:id/submit|revise|baseline    GET .../plans/compare?a=X&b=Y
+GET/POST/PUT /api/sd/initiate/plans/:id/wbs     POST .../plans/:id/estimate    GET .../plans/:id/critical-path
+GET/POST/PUT /api/sd/initiate/readiness         GET/POST/PUT .../customer-tasks    POST .../access-requests
+POST /api/sd/initiate/assign                    GET/POST/PUT .../people-objectives
+GET/POST/PUT /api/sd/initiate/engagement-rules  POST .../engagement-rules/:id/acknowledge
+GET/POST/PUT /api/sd/initiate/delivery-plans    POST .../delivery-plans/:id/assemble    POST .../kickoffs
+GET/POST/PUT /api/sd/initiate/raid
+```
+
+### Core Logic
+1. Project tabhi `active` hoga jab contract review sign-off, baseline plan approved aur readiness blockers clear hon (ya exception approval).
+2. Contract obligations AI se nikalne par `source = ai` aur `verified_by` mandatory, bina verify obligation active nahi.
+3. Har contract line ke distinct performance obligations (`sd_performance_obligations`) identify hote hain aur transaction price allocation ke saath. Yeh Module 9 ke revenue recognition ko feed karta hai.
+4. Plan margin = (budget revenue - budget cost) / budget revenue. Margin guardrail se kam ho to approval level badhta hai (Finance + Delivery Head).
+5. Baseline lock ke baad changes sirf revision se (naya version). Variance baseline vs current dikhta hai.
+6. Estimate rate card (`rate_card_lines`) aur resource cost rate se bottom-up. Analogous estimate `sd_estimate_actuals` (Module 9 knowledge) se calibrate hota hai.
+7. Customer-side task late ho to `delay_days` count hota hai, clock-stop rule contract se aata hai, aur delay evidence change-order proposal (Module 8 Tab 3) ko feed hota hai.
+8. Resource assignment Module 4 matching se hi hoti hai. Customer approval-required ho to approval ke bina allocation confirm nahi.
+9. People objectives HR performance module mein goal ke roop mein push ho sakte hain (assignment end par feedback wapas HR ko, Module 9).
+10. Engagement rules version hote hain. Resource ko project start se pehle acknowledge karna zaroori, rule badle to re-acknowledgement.
+11. Requirement ↔ objective ↔ deliverable ↔ test traceability complete na ho to plan approval par warning.
+12. RAID exposure (probability x impact) se contingency calc hota hai. High exposure risk par mitigation owner mandatory.
+13. SDP customer-signoff ke baad hi Module 8 execution phase unlock.
+14. Har change `audit_log` mein.
+
+---
+
+## MODULE 8: Execute Service Delivery (5.4.2)
+
+### FRONTEND: Screen 8: Service Execution (6 tabs)
+
+**Tab 1. Analyze Environment and Customer Needs** (5.4.2.1)
+- Current-state assessment: discovery findings, stakeholder interviews, as-is documentation, gap analysis, needs prioritization (MoSCoW)
+- (NEW) Assessment questionnaires and automated-discovery import (scanner/tool output)
+- (NEW) Finding severity, evidence attachments, needs → requirement trace, benchmark vs best practice
+
+**Tab 2. Define and Validate Solution** (5.4.2.2, 5.4.2.3)
+- Solution design: components, options, assumptions, estimates, architecture docs. Alternatives with trade-offs
+- Validation: prototype/POC, test plan, test cases, UAT, customer review, design acceptance
+- (NEW) Reusable solution assets library, option-scoring matrix, design decision records
+- (NEW) Peer design-review checklist (security, compliance, DR), traceability requirement → design → test
+- (NEW) Defect tracking, test-run history, validation sign-off with e-signature
+
+**Tab 3. Identify Changes** (5.4.2.4)
+- Change/scope request intake: scope, schedule, cost. Impact analysis (effort, cost, margin, schedule, risk, SLA). Classification: in-scope / out-of-scope / customer-caused
+- (NEW) Scope-creep detection (timesheet vs plan, unplanned work)
+- (NEW) Change order generation (contract amendment) from rate card, change log and trend
+
+**Tab 4. Obtain Approval to Proceed** (5.4.2.5)
+- Stage gates (design, build, deploy): approval package (summary, risks, cost, readiness), internal + customer approvals, conditional approval
+- (NEW) Gate scoring checklist, parallel approvals, delegation, approval SLA
+- (NEW) Auto-block next phase until approved, customer sign-off portal, approval evidence archive
+
+**Tab 5. Build/Buy Solution** (5.4.2.6)
+- Make vs buy vs partner analysis: cost, time, risk, strategic fit, capability, licensing. Vendor RFQ, TCO, decision record
+- (NEW) Weighted decision matrix, supplier shortlist from Module 4 directory
+- (NEW) License/IP/open-source compliance check, margin impact, PO creation (Procurement), third-party component register
+
+**Tab 6. Deploy Solution** (5.4.2.7)
+- Deployment plan/runbook, environment tracker (dev/test/stage/prod), cutover, rollback, checklists, hypercare, daily status, milestone tracking
+- Time and expense capture: timesheets (billable/non-billable), expense claims, approvals
+- (NEW) CI/CD and tool integrations via webhooks, deployment health (success rate, rollback rate), defect burn-down
+- (NEW) Progress measurement (input/output method) jo revenue recognition ko feed karta hai, milestone acceptance workflow
+- (NEW) Auto RAG (schedule, budget, risk se), auto status report, customer project portal
+
+### BACKEND: Tables
+```
+sd_discovery_assessments (id, project_id, name, method[interview/questionnaire/scan/workshop], status, conducted_on)
+sd_discovery_findings (id, assessment_id, finding, severity, evidence_doc_id, requirement_id, status)
+sd_needs_priorities (id, project_id, need, moscow[must/should/could/wont], benchmark_ref, status)
+sd_solutions (id, project_id, name, version_no, architecture_doc_id, assumptions_json, estimate_json, status, approval_request_id)
+sd_solution_options (id, solution_id, option_name, pros_cons_json, score, is_selected)
+sd_solution_components (id, solution_id, component, type, owner_id, source[build/buy/partner/reuse], asset_id)
+sd_solution_assets (id, name, asset_type, description, doc_id, reuse_count, status)
+sd_design_reviews (id, solution_id, checklist_json, reviewer_ids_json, outcome, decided_at)
+sd_test_plans (id, project_id, solution_id, scope, status) / sd_test_cases (id, plan_id, requirement_id, steps_json, expected, status)
+sd_test_runs (id, test_case_id, run_by, result[pass/fail/blocked], executed_at, defect_id)
+sd_defects (id, project_id, title, severity, status, found_in, fixed_in, assignee_id, opened_at, closed_at)
+sd_validations (id, solution_id, validation_type[poc/uat/design_review/customer_review], result, signed_by_json, signed_at)
+sd_change_requests (id, project_id, cr_no, requested_by, description, classification[in_scope/out_of_scope/customer_caused], status, approval_request_id)
+sd_change_impacts (id, cr_id, effort_hrs, cost, revenue, margin_delta, schedule_delta_days, risk_json, sla_impact_json)
+sd_change_orders (id, cr_id, contract_id, amendment_doc_id, value, currency, status, signed_at)
+sd_stage_gates (id, project_id, gate_name[design/build/deploy/custom], criteria_json, score, status, package_doc_id)
+sd_gate_approvals (id, gate_id, approver_type[internal/customer], approver_id, decision[approved/conditional/rejected], conditions_json, decided_at)
+sd_build_buy_analyses (id, project_id, component_id, options_json, criteria_json, selected_option, tco_json, decided_by, decided_at, status)
+sd_third_party_components (id, project_id, name, vendor_id, license_type, version, compliance_status, po_ref)
+sd_environments (id, project_id, name[dev/test/stage/prod], status, owner_id, url_ref)
+sd_deployments (id, project_id, environment_id, release_ref, planned_at, deployed_at, status[planned/in_progress/success/rolled_back/failed], runbook_doc_id)
+sd_deployment_steps (id, deployment_id, step_no, description, owner_id, status, started_at, ended_at)
+sd_progress_entries (id, project_id, period, method[input_cost/input_effort/output_units/milestone], pct_complete, basis_json, approved_by, evidence_doc_id)
+sd_status_reports (id, project_id, period, rag, summary, risks_json, generated_by[manual/auto], published_at)
+sd_timesheet_entries (id, resource_id, project_id, task_id, work_date, hours, billable, rate_card_line_id, cost_rate, bill_rate, currency, status[draft/submitted/approved/billed/locked])
+sd_expense_entries (id, resource_id, project_id, category, amount, currency, receipt_doc_id, billable, status)
+(NEW) sd_scope_alerts (id, project_id, source[timesheet/unplanned_task/manual], deviation_json, status, cr_id)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/execute/assessments        GET/POST/PUT .../findings    GET/POST/PUT .../needs
+GET/POST/PUT /api/sd/execute/solutions          POST .../solutions/:id/submit    GET/POST/PUT .../solutions/:id/options|components
+GET/POST/PUT /api/sd/execute/solution-assets    GET/POST /api/sd/execute/design-reviews
+GET/POST/PUT /api/sd/execute/test-plans         GET/POST/PUT .../test-cases    POST .../test-runs    GET/POST/PUT .../defects
+POST /api/sd/execute/validations
+GET/POST/PUT /api/sd/execute/change-requests    POST .../change-requests/:id/impact    POST .../change-requests/:id/order
+GET /api/sd/execute/scope-alerts
+GET/POST/PUT /api/sd/execute/gates              POST .../gates/:id/approve|reject|conditional
+GET/POST/PUT /api/sd/execute/build-buy          POST .../build-buy/:id/decide    GET/POST/PUT .../components
+GET/POST/PUT /api/sd/execute/environments       GET/POST/PUT .../deployments    PUT .../deployments/:id/step|rollback|complete
+GET/POST /api/sd/execute/progress               GET/POST /api/sd/execute/status-reports    POST .../status-reports/generate
+GET/POST/PUT /api/sd/time/entries               POST .../time/entries/submit|approve    GET/POST/PUT .../expenses
+POST /api/sd/execute/webhooks/ci (tool event intake)
+```
+
+### Core Logic
+1. Execution phase tabhi shuru jab Module 7 ka SDP customer-signed ho. Har aage ka phase stage gate approval par depend karta hai.
+2. Gate approval mein internal aur customer dono (config se) chahiye. Conditional approval par conditions track hoti hain aur due date par check.
+3. Solution validate hone se pehle requirement → design → test traceability complete hona chahiye (coverage % config).
+4. Defect severity-1 open ho to deploy gate approve nahi hota.
+5. Scope-creep detection: timesheet hours ya unplanned tasks plan se config threshold se upar jayen to `sd_scope_alerts` banta hai, aur change request suggest hota hai.
+6. Change impact (effort, cost, margin, schedule, SLA) auto-calc hota hai. Customer-caused change ho to Module 7 ka delay log evidence ke roop mein attach.
+7. Change order approved/signed hone par contract amendment (`contracts` type change_order), plan revision aur billing schedule update ek saath hote hain.
+8. Build-vs-buy decision weighted matrix + TCO se, approval limit `sd_authority_matrix` se. Buy decision par PO request Procurement ko jati hai aur third-party component register mein entry.
+9. Timesheet approval ke baad hi billable hours invoice-eligible. Locked period mein entry block. Cost rate aur bill rate effective-dated rate card se.
+10. Progress % (input/output/milestone method) approved hone par hi revenue recognition schedule update karta hai (Module 9).
+11. Project RAG auto-calc: schedule variance, budget burn, open high risks, defect trend. Rule config se.
+12. Deployment fail/rollback par incident-linked PIR task auto-create (Module 6).
+13. Har gate/approval/change `audit_log` mein.
+
+---
+
+## MODULE 9: Complete Service Delivery (5.4.3)
+
+### FRONTEND: Screen 9: Service Completion (6 tabs)
+
+**Tab 1. Review and Evaluate Success** (5.4.3.1)
+- Closure review: scope delivered, KPIs vs success criteria, schedule/cost/margin variance, closure CSAT, lessons learned, success score
+- (NEW) Weighted success scorecard (config), benefits realization plan (30/60/90 days post go-live)
+- (NEW) Project health history timeline, joint review with customer, team recognition
+
+**Tab 2. Financial Closure** (5.4.3.2)
+- Closing checklist: unbilled WIP, final invoice, revenue recognition true-up, accruals/deferrals, cost reconciliation (labor, expenses, subcontractor invoices), write-offs, credit notes (incl. SLA credits), final margin, project accounting close
+- (NEW) Multi-method revenue: percentage-of-completion, milestone, T&M, retainer (ratable), point-in-time. Multi-book (US GAAP / IFRS 15 / management)
+- (NEW) Contract assets/liabilities (billed vs earned), variable consideration (penalties/bonuses) with constraint, unbilled ageing, DSO
+- (NEW) Intercompany/transfer pricing, tax (GST/VAT/withholding), ledger posting preview
+
+**Tab 3. Delivery Confirmation per Contract** (5.4.3.3)
+- Deliverable acceptance, acceptance certificates, contract-obligation closure checklist (obligation → evidence), warranty start, customer e-sign
+- (NEW) Deemed acceptance rule (contract ke mutabiq N din chup rehne par auto-accept), partial acceptance, dispute/rejection workflow
+- (NEW) Acceptance evidence pack, contract-compliance score, renewal/upsell trigger
+
+**Tab 4. Release Resources and Manage Completion** (5.4.3.4, 5.4.3.5)
+- Release: roll-off, return to bench/next project, access revocation (IAM), asset return, supplier/subcontractor offboarding, timesheet lock, feedback to HR
+- Completion management: completion checklist, handover to run/support (Module 6), open items, formal closure approval, stakeholder communication
+- (NEW) Auto-triggered offboarding tasks, next-assignment suggestions (Module 4), soft close → hard close
+- (NEW) Handover-to-support pack, customer-confirmed closure, cost and billing lock
+
+**Tab 5. Harvest Knowledge** (5.4.3.6)
+- Lessons learned, reusable assets (templates, designs, estimates, code), case study, best practices, knowledge articles
+- (NEW) AI-assisted extraction from project artifacts/tickets (human curated), reuse metrics
+- (NEW) Estimate-vs-actual calibration feed (Module 7 estimating), knowledge quality score, contributor recognition
+- (NEW) Customer-confidential redaction check reuse se pehle
+
+**Tab 6. Archive Records and Update Systems** (5.4.3.7)
+- Project archive: contracts, deliverables, approvals, comms, audit evidence. Retention schedule, legal hold
+- System-sync checklist: CRM, ERP/ledger, CMDB, billing, HR (assignment history, verified skills), asset register, support handover
+- (NEW) Retention policy engine (country/contract/regulation), immutable (WORM) archive, auto delete/anonymize after retention
+- (NEW) Archive search, e-discovery export, customer data return/destroy certificate
+
+### BACKEND: Tables
+```
+sd_closure_reviews (id, project_id, review_date, scope_delivered_pct, schedule_variance_days, cost_variance, margin_actual_pct, closure_csat, summary, status)
+sd_success_scores (id, project_id, dimension, weight, score, evidence_json)
+sd_success_config (id, project_type, dimensions_json, effective_from)
+sd_benefit_tracking (id, project_id, benefit, baseline, target, actual, measure_at_days[30/60/90], status)
+sd_project_financial_close (id, project_id, checklist_json, wip_balance, final_invoice_id, revenue_total, cost_total, margin_final, status[open/soft_closed/hard_closed], closed_at)
+sd_wip_balances (id, project_id, period, unbilled_amount, billed_not_earned, earned_not_billed, currency)
+sd_billing_schedules (id, project_id, contract_line_id, billing_type, due_date, amount, currency, status, invoice_ref)
+sd_rev_rec_schedules (id, project_id, performance_obligation_id, method, book[us_gaap/ifrs/management], period, revenue_amount, cumulative_pct, status[planned/posted/reversed])
+sd_rev_rec_runs (id, period, book, scope_json, total_revenue, status, posted_ledger_ref, run_by, run_at)
+sd_variable_consideration (id, contract_id, type[penalty/bonus/credit], estimate, constraint_applied, status)
+sd_acceptances (id, project_id, deliverable_ref, milestone_id, submitted_at, decision[accepted/rejected/partial/deemed], decided_by_contact_id, certificate_doc_id, deemed_after_days)
+sd_acceptance_disputes (id, acceptance_id, reason, status, resolution, resolved_at)
+sd_warranty_periods (id, project_id, start_date, end_date, terms_json, status)
+sd_obligation_closure (id, obligation_id, evidence_doc_id, closed_by, closed_at, status)
+sd_rolloffs (id, allocation_id, resource_id, rolloff_date, next_assignment_id, status[planned/done])
+sd_offboarding_tasks (id, project_id, resource_id, task_type[access_revoke/asset_return/timesheet_lock/supplier_offboard/hr_feedback], status, due_date, completed_at)
+sd_completion_checklists (id, project_id, items_json, status, approval_request_id)
+sd_handovers (id, project_id, to_team_id, pack_doc_id, accepted_by, accepted_at, status)
+sd_lessons_learned (id, project_id, category, lesson, recommendation, owner_id, status)
+sd_knowledge_assets (id, name, asset_type[template/design/estimate/code/case_study/article], source_project_id, doc_id, redaction_status, quality_score, reuse_count, status)
+sd_knowledge_reuse (id, asset_id, reused_in_project_id, reused_by, reused_at)
+sd_estimate_actuals (id, project_id, service_type, estimated_hrs, actual_hrs, estimated_cost, actual_cost, variance_reasons_json)
+sd_archives (id, project_id, archive_ref, contents_index_json, retention_policy_id, retain_until, immutable, status)
+sd_retention_policies (id, record_type, country_id, contract_type, retain_years, disposal_action[delete/anonymize/review], effective_from)
+sd_legal_holds (id, scope_json, reason, placed_by, placed_at, released_at)
+sd_system_sync_tasks (id, project_id, target_system[crm/erp/cmdb/billing/hris/asset/support], payload_json, status[pending/synced/failed], last_error, synced_at)
+sd_data_return_certificates (id, project_id, customer_id, action[returned/destroyed], doc_id, issued_at)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/sd/complete/closure-reviews     GET /api/sd/complete/success-score?project=X    GET/PUT .../success-config
+GET/POST/PUT /api/sd/complete/benefits
+GET /api/sd/complete/financial-close/:projectId   POST .../financial-close/:projectId/checklist|soft-close|hard-close
+GET /api/sd/complete/wip                          GET/POST/PUT .../billing-schedules    POST .../billing-schedules/:id/invoice
+POST /api/sd/complete/rev-rec/run                 GET .../rev-rec/schedules    POST .../rev-rec/:runId/post    POST .../rev-rec/:runId/reverse
+GET/POST/PUT /api/sd/complete/variable-consideration
+GET/POST /api/sd/complete/acceptances             POST .../acceptances/:id/decide    GET/POST .../acceptance-disputes
+GET/POST/PUT /api/sd/complete/warranty            GET/PUT .../obligation-closure
+POST /api/sd/complete/rolloff                     GET/POST/PUT .../offboarding-tasks    GET/POST/PUT .../completion-checklists
+POST /api/sd/complete/handover
+GET/POST/PUT /api/sd/complete/lessons             GET/POST/PUT .../knowledge-assets    POST .../knowledge-assets/:id/redact-check
+GET /api/sd/complete/estimate-actuals
+POST /api/sd/complete/archive/:projectId          GET/POST/PUT .../retention-policies    GET/POST/PUT .../legal-holds
+GET/POST /api/sd/complete/system-sync             POST .../system-sync/:id/retry    POST .../data-return-certificate
+```
+
+### Core Logic
+1. Hard close tabhi hoga jab financial checklist (WIP zero ya approved write-off, final invoice, rev-rec true-up, cost reconciliation), acceptance, resource release aur handover sab complete hon.
+2. Revenue recognition `sd_performance_obligations.recognition_method` se chalta hai. T&M approved hours x rate se, fixed-fee percentage-completion approved progress (Module 8) se, milestone acceptance par, retainer service period mein ratable, point-in-time delivery/acceptance par.
+3. Fixed-fee milestone jahan billing schedule completion se match nahi karti, wahan billing-based nahi balki progress-based (percentage-completion) recognition lagega. Rule engine yeh check karke warning deta hai.
+4. Billing aur revenue alag track hote hain. Contract asset = earned not billed, contract liability = billed not earned (`sd_wip_balances`).
+5. Variable consideration (SLA credits, penalties, bonus) sirf tab include jab reversal ka risk config threshold se kam ho (constraint). SLA credits Module 1 ke breach se aate hain.
+6. Multi-book: ek hi project ke liye US GAAP, IFRS aur management book alag schedules ban sakte hain. Revenue run period lock ke baad immutable, correction sirf reversal entry se.
+7. Acceptance: contract mein deemed-acceptance days ho to us din ke baad auto-`deemed` (customer ko pehle reminder). Rejection par dispute workflow, aur milestone revenue tab tak hold.
+8. Har contract obligation ka closure evidence ke saath hona chahiye. Bina closure ke warranty start nahi hoti.
+9. Resource release par offboarding tasks auto-generate: IAM revoke, asset return, timesheet lock, supplier offboard, HR ko performance feedback aur verified skills/assignment history (HR employee_assignments).
+10. Handover pack support team accept kare tabhi project operations (Module 6) mein transition hota hai, aur service/agreement/CMDB entries ban jati hain.
+11. Knowledge asset reuse se pehle customer-confidential redaction check mandatory. Fail par asset sirf us customer ke scope mein.
+12. Estimate vs actual `sd_estimate_actuals` mein jata hai aur Module 7 ki estimating ko calibrate karta hai.
+13. Archive retention policy country + contract type + record type se. Legal hold active ho to delete/anonymize block. Retention khatam par disposal action customer data-return/destroy certificate ke saath.
+14. System-sync tasks fail hon to retry aur alert. Koi bhi pending sync hone par project "hard close" nahi.
+15. Har financial close, rev-rec run aur archive action `audit_log` mein.
+
+---
+
+# COVERAGE MAP (APQC 5.0 → Screen/Tab)
+
+| APQC ID | Screen / Tab |
+|---|---|
+| 5.1.1.1 | S1-T1, S1-T2 |
+| 5.1.1.2 | S1-T3, S1-T4 |
+| 5.1.1.3 | S1-T5 |
+| 5.1.1.4 | S1-T6 |
+| 5.1.2.1 to 5.1.2.7 | S2-T1 to S2-T7 (ek ID, ek tab) |
+| 5.2.1.1 to 5.2.1.8 | S3-T1 to S3-T8 (ek ID, ek tab) |
+| 5.2.2.1 to 5.2.2.6 | S4-T1 to S4-T6 (ek ID, ek tab) |
+| 5.2.3.1 to 5.2.3.7 | S5-T1 to S5-T7 (ek ID, ek tab) |
+| 5.3.1 | S6-T1 |
+| 5.3.2 | S6-T2 |
+| 5.3.3 | S6-T3, S6-T4 |
+| 5.3.4 | S6-T5 |
+| 5.4.1.1 | S7-T1 |
+| 5.4.1.2 and 5.4.1.4 | S7-T2 |
+| 5.4.1.3 | S7-T3 |
+| 5.4.1.5 | S7-T4 |
+| 5.4.1.6, 5.4.1.6.1, 5.4.1.6.2 | S7-T5 |
+| 5.4.1.7 | S7-T6 |
+| 5.4.2.1 | S8-T1 |
+| 5.4.2.2 and 5.4.2.3 | S8-T2 |
+| 5.4.2.4 | S8-T3 |
+| 5.4.2.5 | S8-T4 |
+| 5.4.2.6 | S8-T5 |
+| 5.4.2.7 | S8-T6 |
+| 5.4.3.1 | S9-T1 |
+| 5.4.3.2 | S9-T2 |
+| 5.4.3.3 | S9-T3 |
+| 5.4.3.4 and 5.4.3.5 | S9-T4 |
+| 5.4.3.6 | S9-T5 |
+| 5.4.3.7 | S9-T6 |
+
+**Count check:** Screens 9, Tabs 57 (6+7+8+6+7+5+6+6+6). Chart ka koi ID miss nahi hai, sab 5.1 se 5.4.3.7 tak mapped hain.
+
+---
+
+# BUILD ORDER (suggested)
+
+Research ke mutabiq adoption crawl, walk, run order mein chalta hai: pehle project management aur time tracking, phir resource planning, aur last mein forecasting, billing automation aur BI. Tere tool ke liye:
+
+1. **Crawl:** Common Foundation, Module 7, Module 8 (time/expense, projects, plan) aur Module 6 Tab 3 (work items, SLA timers).
+2. **Walk:** Module 4 (skills, matching, capacity), Module 1 (catalog, SLA, KPI) aur Module 9 (acceptance, close).
+3. **Run:** Module 3 (forecasting, accuracy, FVA), Module 9 Tab 2 (multi-book revenue), Module 2, Module 5 aur AI features.
+
+Chhoti si baat: tab/table counts is guide ke hisaab se hain. APQC PCF ka koi alag version use ho raha ho to ID labels ek baar apne version se match kar lena.
+
+Agar chahiye to ab main kisi bhi module ka deep-dive bana sakta hun, jaise exact DB schema ya API request/response contracts.
+
