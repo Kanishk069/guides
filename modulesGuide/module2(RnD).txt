@@ -1,0 +1,821 @@
+Theek hai, pehle research karta hu, phir poori guide bana ke deta hu.Research ho gayi (PLM/stage-gate, EU regulations, recall, warranty accounting, IP docketing). Neeche **8 screens / 41 tabs** ka full guide hai, tere HR guide wale format mein, aur end mein coverage matrix.
+
+---
+
+# RESEARCH NOTES (guide mein jo cheezein inse aayi)
+
+**Regulatory (sab dates config tables mein rakhna, hardcode nahi, aur legal team se verify karwana):**
+- Cyber Resilience Act ke reporting duties 11 Sept 2026 se shuru hain: manufacturers ko actively exploited vulnerabilities aur serious cyber incidents report karne hain. Naya Product Liability Directive 9 Dec 2026 ke baad market mein aane wale products par lagu hoga aur software, AI aur cybersecurity defects ko bhi cover karega.
+- ESPR ka framework aur EU Central DPP Registry 19 July 2026 se live hone wala tha, lekin product-wise delegated acts abhi aane baaki hain, isliye batteries ke baad ki sab dates indicative hain. DPP ke access levels alag hote hain (public vs restricted), aur operators ke paas DPP continuity ka contingency plan hona chahiye. Data carrier QR ya barcode ho sakta hai, aur ek single central database banana maqsad nahi hai.
+- GPSR mein non-EU manufacturer ko EU-based responsible person naam-zad karna padta hai, aur products par type/batch/serial number hona chahiye.
+- FDA ka QMSR ISO 13485 ke saath align hua hai (Feb 2026), isliye medical device wale clients ke liye design controls aur documentation zaruri hain.
+
+**Recall:**
+- US mein NHTSA ko defect determine hone ke 5 business days ke andar report karna hota hai. NHTSA quarterly recall reports maangta hai, aur FDA har 2-4 hafte mein status report maang sakta hai.
+- CPSC ke Fast Track mein report ke 20 working days ke andar voluntary recall implement karna hota hai. FDA effectiveness checks ke levels A se F tak hote hain, aur NHTSA mein registered owners ko 60 din ke andar notice jaata hai.
+- EU Safety Gate alert corrective measure ke 4 working days ke andar jaata hai. Ek guide ke hisaab se lot/serial traceability kam se kam 10 saal retain honi chahiye, aur hotline se quality aur regulatory tak escalation clocks (2h / 4h / 24h) predefined hone chahiye. CPSC compliance records kam se kam 5 saal rakhne ko kehta hai.
+
+**Warranty:**
+- Warranty reserve = units sold x expected claim rate x average cost per claim. US GAAP mein assurance-type warranty ASC 460 ke tahat accrue hoti hai jab cost probable aur estimable ho. Assurance-type aur service-type warranty ka classification (ASC 606 / IFRS 15) accounting treatment decide karta hai, aur extended warranty aksar service-type hoti hai.
+- Claim rate cohort ke hisaab se nikalo (us cohort ke units sold se), us mahine ki sales se nahi. Supplier recovery rate = accepted recovery / requested recovery.
+- Fraud types: non-covered events, inflated repair cost, duplicate claims, ineligible products. Rule-based flags (cost threshold, coverage window, high-frequency claimant) ke saath AI pattern detection bhi chahiye.
+
+**PLM / Portfolio / IP:**
+- PLM ka digital thread as-designed, as-manufactured aur as-maintained ke beech traceability deta hai. Product-in-service (IoT) data wapas PLM mein feed hona chahiye taaki closed-loop improvement ho.
+- Enterprise buyers ko configurable stage-gates (approval quorum logic ke saath), audit trails, role-based access, aur ERP/PLM/Jira/BI integration chahiye.
+- Ek chhooti hui patent annuity se granted patent lapse ho sakta hai. Docketing system jurisdiction ke hisaab se deadlines khud calculate karta hai. Open-source license scanning (FOSSology jaise tools) software products mein IP obligations pakadne ke liye zaruri hai.
+
+---
+
+# COMMON FOUNDATION (sab modules pe lagu)
+
+**Common rules:** API prefix `/api/pdm/...`. Har create/edit/action `audit_log` mein. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath (delete nahi, disable). Har table mein `entity_id` (multi-company). Policy, rate, threshold, deadline-clock aur scoring weights **config tables** mein, hardcode nahi.
+
+**Shared tables:**
+```
+audit_log (id, entity_id, table_name, record_id, action, changed_by, changed_at, old_value, new_value, ip)
+approval_workflows (id, module, condition_json, steps_json[role/user, order, sla_hours, parallel, quorum_rule], status)
+approval_requests (id, module, record_id, requested_by, current_step, status[pending/approved/rejected/withdrawn/sent_back], created_at)
+approval_actions (id, request_id, step, actor_id, action, remarks, acted_at)
+approval_delegations (id, delegator_id, delegate_id, from_date, to_date, modules_json)
+notifications (id, user_id, type, ref_module, ref_id, message, channel[in_app/email/sms/chat], sent_at, read_at)
+documents (id, owner_type, owner_id, doc_type, file_url, version, classification, uploaded_by, uploaded_at, retention_until, legal_hold)
+comments (id, ref_module, ref_id, user_id, text, created_at)
+custom_fields (id, module, field_name, field_type, options_json, is_required)
+custom_objects (id, module, object_name, schema_json) / custom_object_records (id, object_id, ref_id, data_json)
+reason_codes (id, event_type, code, label, status)
+translations (id, ref_table, ref_id, field, language_code, text)
+business_events (id, event_type, ref_type, ref_id, effective_date, entered_on, payload_json, status[pending/applied/rescinded])
+legal_entities (id, name, country, base_currency, fiscal_year_start, status)
+countries (id, iso_code, name, default_currency, default_language) / country_config (id, country_id, module, config_json, effective_from)
+currencies (id, code, symbol, decimals) / exchange_rates (id, from_ccy, to_ccy, rate, rate_type[spot/budget/average], effective_date)
+fiscal_calendars (id, entity_id, name, start_month, periods_json)
+locations (id, name, type[plant/dc/office/lab/service_center], city, country_id, entity_id)
+org_units (id, name, parent_id, type, head_id)    users (id, employee_ref, roles_json, status)
+```
+
+**Product foundation tables:**
+```
+products (id, product_code, name, product_type[physical/software/service/bundle/saas/hybrid], family_id, business_unit_id, owner_id, lifecycle_stage[idea/concept/development/launch/growth/mature/decline/eol/retired], brand, ai_risk_class, entity_id, status)
+product_families (id, name, parent_id, description, status)
+product_versions (id, product_id, version_label, variant_json, release_state[draft/in_review/released/obsolete], released_on, effective_from, effective_to)
+product_markets (id, product_id, country_id, channel, regulatory_status, launch_date, sunset_date, status)
+parties (id, party_type[supplier/partner/customer/regulator/lab/agency/law_firm/distributor], name, country_id, risk_rating, status)
+programs (id, name, owner_id, budget, currency, status)
+projects (id, program_id, product_id, project_type[ndp/enhancement/sustaining/research/retirement/regulatory], gate_template_id, current_gate, start_date, end_date, status)
+```
+
+**Shared engines:**
+```
+-- Stage-Gate Engine
+gate_templates (id, name, product_type, project_type, gates_json[code, name, criteria_ids, required_deliverables, quorum_rule], status)
+gate_reviews (id, project_id, gate_code, scheduled_date, decision[go/kill/hold/recycle/conditional_go], conditions_json, decided_on, approval_request_id)
+gate_criteria (id, template_id, gate_code, criterion, type[score/checklist/metric], threshold, source_ref)
+gate_criteria_results (id, gate_review_id, criterion_id, value, passed, evidence_doc_id)
+
+-- Change Engine (ECR / ECO / ECN / deviation / waiver)
+change_requests (id, change_no, change_type, product_id, reason_code_id, priority, impact_json, effectivity_type[date/lot/serial/unit], effectivity_value, status[draft/review/approved/implemented/closed/rejected], approval_request_id)
+change_affected_objects (id, change_id, object_type, object_id, from_version, to_version, action)
+
+-- Digital Thread
+trace_links (id, source_type, source_id, source_version, target_type, target_id, target_version, link_type[derives_from/satisfies/verifies/implements/impacts/supersedes/complies_with], suspect_flag, created_by)
+
+-- Access and Integrations
+access_policies (id, object_type, classification[public/internal/confidential/restricted/export_controlled], allowed_roles_json, allowed_countries_json, effective_from)
+integration_mappings (id, system[erp/cad/mes/qms/crm/jira/lms/scm], object_type, direction[in/out/bi], mapping_json, schedule, status)
+external_refs (id, object_type, object_id, system, external_id, last_synced_at, sync_status)
+```
+
+**Common rules (advanced):**
+- **Released-object rule:** released BOM, spec, drawing, requirement baseline, policy, technical file direct edit nahi hota. Change sirf Change Engine (ECR/ECO) se, effectivity ke saath.
+- **Stage-Gate Engine:** gates config se, criteria + evidence + quorum approval. Koi bhi project gate pass kiye bina aage nahi badhta.
+- **Digital thread:** requirement ↔ design ↔ BOM ↔ test ↔ regulation ↔ warranty/field data sab `trace_links` se. Upstream object badalne par downstream links `suspect_flag` hote hain.
+- **Three product views:** as-designed (EBOM), as-built (MBOM + lot/serial genealogy), as-maintained (service BOM + installed base).
+- **Effective-dating aur as-of reports:** koi bhi report kisi bhi date ke hisaab se chalegi.
+- **Classification-based access:** IP-restricted aur export-controlled data role + country + purpose se gated, har access `audit_log` mein.
+- **Multi-country / currency / language:** amounts ke saath currency, regulatory data country-wise, user-facing text `translations` se.
+- **Integrations bidirectional:** ERP, CAD, MES, QMS, CRM, Jira/Azure DevOps, LMS. Har synced record ka `external_refs` mein mapping.
+- **Approval engine:** parallel steps, quorum, send-back, delegation, SLA escalation, fallback approver.
+
+**Dependencies (naam se):** Approval Engine, Notification Engine, Document Store, ERP/Ledger, Procurement/Supplier Management, QMS, MES/Manufacturing, CRM/Service, Learning (LMS), HR (employees, skills, capacity), Legal/Contracts, Analytics.
+
+---
+
+# MODULE 1: Portfolio Strategy & Targets (2.1.1)
+
+### FRONTEND: Screen 1: Product Portfolio Management (4 tabs)
+
+**Tab 1. Portfolio Performance** (2.1.1.1)
+- Product grid: revenue, margin, growth, market share, NPS, lifecycle stage, health score. Filter by family/region/channel/BU, "as-of date".
+- Matrix views: growth-share, market attractiveness vs competitive strength, lifecycle curve.
+- Market opportunity overlay: TAM/SAM/SOM, segment growth, white-space map. Product vs opportunity gap.
+- Underperformer flag with action tag: Invest / Maintain / Harvest / Divest, aur owner + due date.
+
+**Tab 2. Alignment & Prioritization** (2.1.1.2, 2.1.1.3)
+- Strategy link: concept/product ko objective/OKR se jodo, alignment score + rationale.
+- Scoring model builder: weighted criteria (strategic fit, market attractiveness, NPV/IRR, risk, technical feasibility, resource fit).
+- Scenario planner: budget, capacity, risk cap constraints dalo, optimizer best mix suggest kare. Scenarios side-by-side compare.
+- Funding dashboard: funded / deferred / killed, rationale mandatory. Horizon mix (H1/H2/H3), risk-return bubble chart, dependency view.
+- Decision approval with quorum.
+
+**Tab 3. Targets: Cost, Quality, Timing** (2.1.1.4, 2.1.1.5)
+- Target costing: target price, target margin, allowable cost, category-wise cost targets (material, labour, tooling, logistics, warranty, cloud/software).
+- Quality targets: PPM, first-pass yield, MTBF, warranty rate, NPS, SLA/uptime.
+- Timing targets: milestones, launch window, time-to-market target, tolerance days.
+- Baseline lock, version compare, rolling re-forecast, variance vs actual.
+
+**Tab 4. Offering Modifications** (2.1.1.6)
+- Modification plan: type (feature/price/pack/variant/localisation/sunset/bundle), rationale, target markets, planned date.
+- Impact analysis (auto): affected BOMs, inventory, regulatory approvals, documents, customers, revenue.
+- "Raise Change Request" ke saath market-wise rollout schedule.
+
+### BACKEND: Tables
+```
+portfolios (id, name, owner_id, budget, currency, period, status)
+portfolio_items (id, portfolio_id, product_id, concept_id, category, horizon[h1/h2/h3], strategic_objective_ref, status[proposed/evaluating/funded/deferred/killed/active], project_id)
+portfolio_snapshots (id, snapshot_date, product_id, revenue, gross_margin_pct, growth_pct, market_share_pct, nps, health_score, lifecycle_stage, currency)
+market_opportunities (id, name, segment, region, tam, sam, som, growth_rate, source, as_of_date, currency)
+strategy_links (id, item_id, objective_ref, alignment_score, rationale)
+scoring_models (id, name, criteria_json[name, weight, scale], version, status)
+portfolio_scores (id, item_id, model_id, criterion_scores_json, total_score, scored_by, scored_on)
+financial_cases (id, item_id, version, cash_flows_json, discount_rate, npv, irr, payback_months, currency)
+portfolio_scenarios (id, portfolio_id, name, constraints_json, selected_items_json, total_npv, total_cost, risk_score, status)
+portfolio_decisions (id, item_id, scenario_id, decision, rationale, decided_by, decided_on, approval_request_id)
+target_sets (id, item_id, version, target_price, target_margin_pct, allowable_cost, is_baseline, status)
+cost_targets (id, target_set_id, category, target_amount, currency)
+quality_targets (id, target_set_id, metric, target_value, threshold)
+timing_targets (id, target_set_id, milestone, target_date, tolerance_days)
+offering_modifications (id, product_id, mod_type, description, rationale, impact_json, target_markets_json, change_request_id, planned_date, effective_from, status)
+health_score_rules (id, name, weights_json, thresholds_json, effective_from)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/portfolio/portfolios    GET .../portfolios/:id/matrix
+GET /api/pdm/portfolio/performance?asof=X     GET/POST/PUT .../market-opportunities
+GET/POST/PUT /api/pdm/portfolio/items         POST .../items/:id/score
+GET/POST/PUT /api/pdm/portfolio/scoring-models
+GET/POST/PUT /api/pdm/portfolio/scenarios     POST .../scenarios/:id/optimize    GET .../scenarios/compare?ids=1,2
+POST /api/pdm/portfolio/items/:id/decide      POST .../items/:id/fund-to-project
+GET/POST/PUT /api/pdm/portfolio/target-sets   POST .../target-sets/:id/baseline    GET .../target-sets/:id/variance
+GET/POST/PUT /api/pdm/portfolio/modifications    POST .../modifications/:id/impact    POST .../modifications/:id/raise-change
+```
+### Core Logic
+1. Portfolio snapshot nightly ERP/CRM/Analytics se aata hai, `health_score` = `health_score_rules` ke weighted metrics.
+2. Underperformer rule: health score threshold se N periods neeche to automatic review task.
+3. Priority score = sum(weight x normalized score), models versioned. Optimizer budget + capacity + risk caps ke andar best NPV mix nikalta hai.
+4. Funded/deferred/killed decision mein rationale mandatory, quorum approval Gate Engine se.
+5. Funded item par automatically project (Module 7) banta hai aur target set baseline lock hota hai. Target badalna = naya version + reason.
+6. Allowable cost = target price x (1 - target margin). Cost targets ka sum allowable cost se zyada ho to red flag.
+7. Actual cost/quality/timing Module 7, Module 2 aur ERP se aate hain, variance par alert.
+8. Modification impact analysis `trace_links` aur where-used se auto, approved hone par Change Engine mein ECR.
+9. Multi-currency: group base currency mein budget rate se conversion.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 2: Lifecycle, Launch & Post-Launch (2.1.2)
+
+### FRONTEND: Screen 2: Product Lifecycle Management (6 tabs)
+
+**Tab 1. Launch Plan** (2.1.2.1)
+- Plan per product version: launch tier (A/B/C), target date, budget, owner.
+- Market-wise plan: country, channel, planned date, readiness (regulatory, supply, pricing, marketing, support, training).
+- Workstreams + RACI, risk register, dependencies, readiness checklist (mandatory items), readiness score auto.
+
+**Tab 2. Introduction & Rollout** (2.1.2.2)
+- Phased rollout: pilot, regional, global, with exit criteria per phase.
+- Go/no-go sign-offs per market, launch command-center issue log (severity, owner, SLA).
+- Channel activation: price list, catalog, inventory seeding. Software: feature flags aur canary %.
+
+**Tab 3. Retirement** (2.1.2.3)
+- EOL plan: trigger reason, announce date, last order, last ship, end-of-support date, replacement product.
+- Where-used check (BOM, bundles, contracts), last-time-buy, inventory disposition (sell-down/rework/scrap/donate/return-to-vendor), customer migration path.
+- Spare parts and service obligation tracker, data archival, regulatory/DPP deregistration tasks.
+
+**Tab 4. Performance Indicators** (2.1.2.4)
+- KPI library: formula, unit, direction, data source, owner, applicable lifecycle stage, version.
+- Targets per product/family/BU with RAG thresholds from config, trend, benchmark.
+- Refine workflow: KPI change with rationale + approval, change log.
+
+**Tab 5. Post-Launch: Market & Supply Chain** (2.1.2.5.1 to 2.1.2.5.4)
+- Market acceptance: adoption curve, sell-through, repeat purchase, returns rate, review sentiment, NPS, cohort retention, price elasticity.
+- Market performance: plan vs actual units/revenue/share by region and channel.
+- Supply chain effectiveness: OTIF, fill rate, lead time, stock-outs, landed cost, forecast MAPE/bias, node (plant/DC/distributor/3PL) wise.
+- Methodology analytics: compare sourcing/distribution methods (make-vs-buy, direct-vs-distributor, network scenarios) with simulation results.
+
+**Tab 6. Post-Launch: Quality, Financial & Process Assessment** (2.1.2.5.5 to 2.1.2.5.7)
+- Quality and performance: DPPM, field failure, complaint trends, warranty claim rate (cohort-based), uptime/SLA, CAPA links.
+- Financial review: business case vs actual (revenue, cost, margin), recalculated NPV/IRR/payback, launch cost.
+- NPD process assessment: cycle time vs plan, gate pass rates, rework %, budget variance, maturity score, retrospective, lessons learned (reusable).
+
+### BACKEND: Tables
+```
+launch_plans (id, product_version_id, name, launch_tier, target_date, budget, currency, owner_id, status, approval_request_id)
+launch_market_plans (id, launch_plan_id, country_id, channels_json, planned_date, regulatory_ready, supply_ready, pricing_ready, marketing_ready, support_ready, readiness_score, go_nogo, status)
+launch_workstreams (id, launch_plan_id, workstream, owner_id, due_date, status)
+launch_readiness_items (id, market_plan_id, item, mandatory, owner_id, evidence_doc_id, status)
+launch_risks (id, launch_plan_id, risk, probability, impact, mitigation, owner_id, status)
+rollout_phases (id, launch_plan_id, phase[pilot/regional/global], rollout_pct, start_date, exit_criteria_json, status)
+release_flags (id, product_version_id, flag_key, rollout_pct, segments_json, status)
+launch_issues (id, launch_plan_id, severity, description, owner_id, status, raised_at, resolved_at)
+retirement_plans (id, product_id, trigger_reason_id, announce_date, last_order_date, last_ship_date, end_of_support_date, replacement_product_id, status, approval_request_id)
+eol_inventory_plans (id, retirement_plan_id, item_id, location_id, qty, disposition, recovery_value, currency)
+customer_migration_plans (id, retirement_plan_id, segment, migration_path, offer_json, status)
+kpi_definitions (id, name, category, formula_json, unit, direction, data_source, owner_id, applicable_stages_json, version, status)
+kpi_targets (id, kpi_id, scope_type, scope_id, target, green_min_pct, amber_min_pct, effective_from)
+kpi_values (id, kpi_id, scope_type, scope_id, period, value, source)
+kpi_change_log (id, kpi_id, change, rationale, approved_by, changed_on)
+post_launch_reviews (id, product_version_id, review_type[30d/90d/180d/365d/adhoc], review_date, findings_json, decisions_json, status, approval_request_id)
+market_acceptance_metrics (id, review_id, metric, value, benchmark, region, period)
+market_performance (id, product_id, country_id, channel, period, planned_units, actual_units, planned_revenue, actual_revenue, share_pct, currency)
+sc_performance (id, product_id, node_type, node_id, period, otif_pct, fill_rate, lead_time_days, stockouts, landed_cost, forecast_mape, bias)
+sc_method_analyses (id, review_id, method_name, scenario_json, result_json, run_by, run_at)
+quality_field_metrics (id, product_version_id, period, dppm, field_failure_rate, complaint_count, warranty_claim_rate, nps, uptime_pct)
+financial_reviews (id, review_id, planned_json, actual_json, variance_json, recalculated_npv, recalculated_irr, payback_months, currency)
+npd_assessments (id, review_id, project_id, cycle_time_days, planned_cycle_days, gate_pass_json, rework_pct, budget_variance_pct, maturity_score)
+lessons_learned (id, source_type, source_id, category, lesson, recommendation, applies_to_json, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/lifecycle/launch-plans    GET .../launch-plans/:id/readiness    POST .../market-plans/:id/go-nogo
+GET/POST/PUT /api/pdm/lifecycle/rollout         PUT .../rollout/:id/advance    GET/POST/PUT .../release-flags
+GET/POST/PUT /api/pdm/lifecycle/retirement      GET .../retirement/:id/where-used    POST .../retirement/:id/complete
+GET/POST/PUT /api/pdm/lifecycle/kpis            POST .../kpis/:id/values    POST .../kpis/:id/refine
+GET/POST /api/pdm/lifecycle/post-launch-reviews    GET .../post-launch-reviews/:id/market|supply-chain|quality|financial|process
+POST /api/pdm/lifecycle/sc-analysis/run         GET/POST /api/pdm/lifecycle/lessons
+```
+### Core Logic
+1. Readiness score = weighted mandatory items. Go/no-go tab tak blocked jab tak mandatory items done aur `regulatory_ready = true` (market registration Module 3 se).
+2. Launch activation effective-dated `product_markets` update karta hai aur ERP/commerce ko push hota hai.
+3. Post-launch reviews launch date se config offsets (30/90/180/365 din) par auto-schedule.
+4. Retirement tab block hota hai jab open orders, active contracts ya warranty obligation ka plan na ho. Where-used mein dependent bundles/BOMs dikhte hain.
+5. End-of-support >= last ship date + longest warranty/service term (auto-calc, override ke liye reason).
+6. Retirement complete hone par lifecycle_stage = retired, regulatory/DPP deregistration tasks aur records retention rules ke saath archive.
+7. KPI formula change par history rewrite nahi hoti, optional recalculation flag ke saath.
+8. Claim rate cohort-based (us cohort ke units sold se), us mahine ki sales se nahi.
+9. NPD assessment aur lessons learned Module 7 ke gate templates ko improve karne ke inputs bante hain.
+10. Field/IoT data (installed base) quality metrics aur Module 5 improvement backlog dono ko feed karta hai.
+11. `audit_log` har action pe.
+
+---
+
+# MODULE 3: IP, Regulatory & Compliance (2.1.3)
+
+### FRONTEND: Screen 3: IP and Regulatory Management (5 tabs)
+
+**Tab 1. Reviews** (2.1.3.1)
+- Mandatory reviews (regulatory, safety, legal, export control, environmental, privacy impact) aur elective reviews (peer, FTO, ethics, accessibility).
+- Review templates per product type x market x gate, reviewers, findings (severity, owner, due), waivers with approval, outcome.
+- Gate readiness: kaun si reviews pending hain.
+
+**Tab 2. IP Needs & Portfolio** (2.1.3.3)
+- Invention disclosure to evaluation committee, with decision: patent / trade secret / defensive publication / copyright / trademark / design right / none.
+- Asset register: patents, trademarks, copyrights, designs, domains with family, jurisdiction, status, counsel, cost.
+- Docket: deadlines (exam request, office action, PCT national phase, renewals), annuity decisions (pay/abandon/review) with lapse-risk alerts.
+- Patent-to-product map, licenses in/out with royalty terms, inventor remuneration.
+
+**Tab 3. Infringement** (2.1.3.2)
+- Outbound risk: FTO analyses per product/jurisdiction, risk rating, design-around options.
+- Inbound: watch alerts (patent, trademark, marketplace), evidence, cease-and-desist, litigation cases, counsel, cost. Privileged flag.
+- Open-source: SBOM scan results, license policy (allowed/restricted/banned), conflicts.
+
+**Tab 4. Technical Documentation** (2.1.3.4)
+- Requirements matrix: product type x market x regulation to required documents (technical file, DoC, risk assessment, test reports, manual, labels, safety data sheet, design history file).
+- Technical file per market with completeness %, document status, version tied to product version.
+- Declaration of Conformity generator, markings (CE/UKCA/BIS etc.), EU responsible person details.
+- DPP record: unique ID, QR/data carrier, public/authority/restricted data groups, backup copy.
+- Export bundle (authority submission pack), retention rules.
+
+**Tab 5. Regulatory Management** (2.1.3.5, 2.1.3.5.1 to 2.1.3.5.3)
+- Regulation register: jurisdiction, regulator, applicability rule, obligations, effective dates. Regulatory change monitoring with impact assessment.
+- Applicability engine: product attributes x market to obligations list. Controls and tasks.
+- Training: role-based assignments, completion tracking (2.1.3.5.1).
+- Records for agencies: retention schedule, legal hold, audit packs (2.1.3.5.2).
+- Submission lifecycle: plan to prepare to submit to queries to approval to renewal/variation/periodic report (2.1.3.5.3). Certificates tracker with expiry. Incident/vulnerability reporting with clocks.
+
+### BACKEND: Tables
+```
+review_templates (id, review_type, mandatory, product_type, market_id, gate_code, checklist_json, status)
+reviews (id, review_type, mandatory, product_version_id, project_id, gate_code, template_id, scheduled_date, reviewers_json, outcome, status)
+review_findings (id, review_id, severity, description, owner_id, due_date, waiver_id, status)
+review_waivers (id, finding_id, justification, approval_request_id, valid_until)
+invention_disclosures (id, title, description, inventors_json, product_id, disclosed_on, novelty_assessment, decision, decided_by, status)
+ip_assets (id, asset_type, title, family_id, jurisdiction, application_no, filing_date, grant_date, expiry_date, status, owner_entity_id, counsel_party_id, cost_to_date, currency)
+ip_families (id, name, priority_date, description)
+ip_deadline_rules (id, jurisdiction, asset_type, event, offset_json, effective_from)
+ip_deadlines (id, ip_asset_id, deadline_type, due_date, rule_id, assigned_to, status)
+ip_annuities (id, ip_asset_id, due_date, amount, currency, decision, decided_by, paid_on)
+ip_product_map (id, ip_asset_id, product_id, relation[practices/protects/licensed_in/blocks])
+ip_licenses (id, direction, counterparty_id, ip_asset_ids_json, terms_json, royalty_json, start_date, end_date, contract_doc_id, status)
+inventor_awards (id, disclosure_id, employee_id, award_type, amount, currency, paid_on)
+fto_analyses (id, product_version_id, jurisdictions_json, search_ref, findings_json, risk, design_around_json, approved_by)
+infringement_cases (id, direction[outbound_risk/inbound], ip_ref, counterparty_id, product_id, risk_rating, privileged, counsel_id, status, opened_on, closed_on, cost, currency)
+ip_watch_alerts (id, source, matched_ref, score, status)
+oss_components (id, product_version_id, name, version, license_spdx, scan_run_id, risk, approved)
+oss_license_policies (id, license_spdx, policy[allowed/restricted/banned], conditions)
+reg_doc_requirements (id, product_type, market_id, regulation_id, doc_type, mandatory, template_id)
+tech_files (id, product_version_id, market_id, regulation_id, completeness_pct, status, last_reviewed)
+tech_file_items (id, tech_file_id, requirement_id, document_id, status)
+declarations_of_conformity (id, product_version_id, regulation_ids_json, signed_by, signed_on, document_id, status)
+dpp_records (id, product_version_id, unique_id, carrier_type, carrier_placement, public_data_json, authority_data_json, restricted_data_json, registry_ref, backup_ref, status)
+regulations (id, name, jurisdiction, regulator, category, applicability_rule_json, effective_from, sunset_date, source_url, status)
+regulation_obligations (id, regulation_id, obligation, control_id, frequency, due_rule_json)
+reg_changes (id, regulation_id, change_summary, detected_on, impact_json, status)
+compliance_tasks (id, obligation_id, product_id, market_id, owner_id, due_date, evidence_doc_id, status)
+reg_training_assignments (id, obligation_id, role_id, employee_id, course_ref, due_date, completed_on, status)
+reg_records (id, record_type, product_id, regulation_id, document_id, retention_until, legal_hold, status)
+reg_submissions (id, regulation_id, authority_id, product_version_id, market_id, submission_type[registration/notification/variation/renewal/periodic_report/incident_report], stage, submitted_on, approved_on, expiry_date, reference_no, fee, currency)
+reg_submission_events (id, submission_id, event, due_date, done_on, document_id)
+reg_certificates (id, product_version_id, cert_type, issuer_id, cert_no, issue_date, expiry_date, scope, status)
+regulatory_clock_rules (id, regulation_id, trigger_event, clock_hours/days, notify_roles_json, escalation_json)
+incident_reports (id, product_id, incident_type[safety/cyber_vulnerability/serious_incident], detected_at, clock_rule_id, reported_at, authority_ref, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/compliance/reviews    GET/POST .../reviews/:id/findings    POST .../findings/:id/waive
+GET/POST/PUT /api/pdm/ip/disclosures        POST .../disclosures/:id/decide
+GET/POST/PUT /api/pdm/ip/assets             GET .../assets/:id/deadlines    GET/PUT .../annuities
+GET/POST/PUT /api/pdm/ip/licenses           GET/POST/PUT .../fto    GET/POST/PUT .../infringement-cases
+POST /api/pdm/ip/oss/scan?productVersion=X  GET/PUT .../oss/policies
+GET/POST/PUT /api/pdm/compliance/tech-files GET .../tech-files/:id/completeness    POST .../tech-files/:id/export
+POST /api/pdm/compliance/doc/generate       GET/POST/PUT .../dpp
+GET/POST/PUT /api/pdm/compliance/regulations    GET .../regulations/applicable?product=X&market=Y
+GET/POST/PUT /api/pdm/compliance/submissions    GET/POST .../certificates    GET/POST .../training    GET/POST/PUT .../incidents
+```
+### Core Logic
+1. Mandatory reviews pending ho to gate pass nahi hota. Waiver sirf approval ke saath aur `valid_until` ke baad expire.
+2. Docket deadlines `ip_deadline_rules` se jurisdiction-wise auto-calc, alerts escalating (e.g., 180/90/30 din). Annuity decision pending hone par lapse-risk flag.
+3. Invention disclosure approved hone par `ip_assets` ka record banta hai aur inventor award process start hota hai.
+4. OSS scan har release par SBOM se auto-run, banned license milne par release block.
+5. Applicability engine: product attributes (type, connectivity, battery, AI, materials) x market x regulations se obligations nikalta hai. Ye Module 6 ke regulatory requirements ko feed karta hai.
+6. Technical file completeness 100% (mandatory docs) hone tak market launch (Module 2) block.
+7. Incident clocks `regulatory_clock_rules` se (defaults Research Notes ke hisaab se, legal verify kare). Breach hone par exec escalation.
+8. Certificate expiry par reminders, aur expire hone par market status "at risk".
+9. Regulatory change detect hone par impact assessment task: affected products, requirements, docs.
+10. Training mandatory hai jab obligation role-specific ho, completion LMS se sync.
+11. Records retention + legal hold: hold ke dauran delete/purge block.
+12. Privileged legal cases ka data sirf legal roles ko.
+13. `audit_log` har action pe.
+
+---
+
+# MODULE 4: Product Master Data (2.1.4)
+
+### FRONTEND: Screen 4: Master Data Management (6 tabs)
+
+**Tab 1. Materials Master** (2.1.4.1)
+- Item list: item no, type (raw/semi/finished/spare/packaging/service/digital), UoM, make/buy, lifecycle, class, plant views.
+- Org views (purchasing, MRP, storage, costing, quality, sales), UoM conversions, alternates/substitutes, approved sources (AML/AVL).
+- Governance: create/change request workflow with validation rules, duplicate detection, data-quality score, golden record merge, mass upload, multi-language descriptions.
+
+**Tab 2. Bills of Material** (2.1.4.2)
+- Multi-level BOM, views: EBOM / MBOM / service BOM / software BOM.
+- Variants (option rules, 150% BOM), effectivity (date/lot/serial), alternates, phantoms, where-used, BOM compare.
+- Costed roll-up, compliance roll-up (RoHS/REACH/conflict minerals/recycled content/carbon footprint), release workflow, CAD import.
+
+**Tab 3. Routings & Process Specs** (2.1.4.3, 2.1.4.8)
+- Routing: operations, work centers, setup/run time, yield, skills, tooling, inspection points, alternate routings.
+- Process specs: parameters with target/LSL/USL, control limits, recipes, equipment settings. Service delivery process specs (blueprint steps, SLA).
+
+**Tab 4. Specifications, Drawings & Quality Docs** (2.1.4.4, 2.1.4.5, 2.1.4.7)
+- Specs (functional/material/packaging/labeling) with version and requirement links.
+- Drawings: CAD files + neutral formats (STEP/PDF), revision, viewer/markup.
+- Quality docs: inspection plans, sampling (AQL), control plans, FMEA, first-article/PPAP, CoA, test methods.
+
+**Tab 5. Classification & Traceability** (2.1.4.6, 2.1.4.9)
+- Schemes: UNSPSC, GPC, eCl@ss, HS/HSN, ECCN, internal taxonomy. Attribute templates per class, auto-classification suggestion with confidence.
+- Traceability: lot/serial genealogy (as-built), component to finished to customer links, forward/backward trace query, serialization (GTIN/UDI), recall-scope generator.
+
+**Tab 6. Data Access Requests** (2.1.4.10)
+- Request form: scope (object/class/plant/product), purpose, duration. Approvals by data owner/steward.
+- Segregation-of-duties check, time-boxed grants, auto-revoke, periodic access recertification, export-control/IP restriction flags.
+
+### BACKEND: Tables
+```
+items (id, item_no, description, item_type, uom_base, make_buy, lifecycle_status, class_id, hs_code, eccn, country_of_origin, hazmat_class, batch_controlled, serial_controlled, shelf_life_days, weight, dims_json, std_cost, currency, golden_record_id, dq_score, effective_from, effective_to, status)
+item_org_views (id, item_id, plant_id, view_type, attributes_json)
+item_uom_conversions (id, item_id, from_uom, to_uom, factor)
+item_alternates (id, item_id, alt_item_id, type[substitute/equivalent/supersession], rule_json)
+item_sources (id, item_id, party_id, mpn, status[approved/conditional/blocked], price_json, lead_time_days)
+md_change_requests (id, object_type, object_id, payload_json, validation_json, duplicate_check_json, approval_request_id, status)
+md_validation_rules (id, object_type, rule_json, severity, status)
+bom_headers (id, product_version_id, item_id, bom_view[ebom/mbom/service/software], usage, revision, base_qty, status, effective_from, effective_to, plant_id)
+bom_lines (id, bom_id, line_no, component_item_id, qty, uom, scrap_pct, is_phantom, option_rule_json, effectivity_json, alt_group, ref_designator, sourcing_rule)
+bom_compliance_rollups (id, bom_id, regulation_tag, result_json, computed_at)
+work_centers (id, plant_id, name, capacity_json, cost_rate)
+routings (id, item_id, plant_id, revision, status, effective_from)
+routing_operations (id, routing_id, op_no, work_center_id, description, setup_min, run_min_per_unit, yield_pct, skill_id, tooling_json, inspection_plan_id)
+process_specs (id, ref_type[item/routing_op/service_step], ref_id, spec_type, parameters_json, version, status)
+specifications (id, spec_no, spec_type, title, content, document_id, version, status, requirement_ids_json)
+drawings (id, drawing_no, title, item_id, format, cad_system, file_url, neutral_file_url, revision, status, released_on)
+inspection_plans (id, item_id, plan_type[incoming/in_process/final/field], characteristics_json, sampling_json, version, status)
+quality_docs (id, doc_type[fmea/control_plan/ppap/first_article/coa/test_method], item_id, document_id, version, status)
+classification_schemes (id, name, type, version)
+classes (id, scheme_id, code, name, parent_id, attribute_template_json)
+item_classifications (id, item_id, class_id, attribute_values_json, confidence, method[manual/auto], approved_by)
+lots (id, item_id, lot_no, produced_on, plant_id, supplier_lot_ref, status[released/quarantine/blocked/recalled], expiry_date)
+serials (id, item_id, serial_no, lot_id, status, built_on, as_built_json, shipped_to_party_id, shipped_on)
+genealogy_links (id, parent_type, parent_id, child_type, child_id, qty, consumed_on, operation_ref)
+distribution_records (id, lot_id, serial_id, customer_id, channel, qty, shipped_on, doc_ref)
+serialization_ids (id, serial_id, gtin, udi_di, udi_pi)
+data_access_policies (id, scope_json, classification, approver_roles_json, sod_rules_json, max_duration_days)
+data_access_requests (id, requester_id, scope_json, purpose, duration_days, status, approval_request_id, granted_from, granted_to, revoked_at, revoke_reason)
+access_reviews (id, cycle, reviewer_id, grant_id, decision, decided_on)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/md/items    POST .../items/bulk    GET .../items/:id/where-used    POST .../items/duplicate-check
+GET/POST/PUT /api/pdm/md/change-requests    POST .../change-requests/:id/submit
+GET/POST/PUT /api/pdm/md/boms     GET .../boms/:id/explode    GET .../boms/compare?a=X&b=Y    GET .../boms/:id/cost-rollup    GET .../boms/:id/compliance
+GET/POST/PUT /api/pdm/md/routings    GET/POST/PUT .../process-specs
+GET/POST/PUT /api/pdm/md/specifications    GET/POST/PUT .../drawings    GET/POST/PUT .../inspection-plans    GET/POST .../quality-docs
+GET/POST/PUT /api/pdm/md/classification/schemes|classes    POST .../classification/suggest
+GET /api/pdm/md/trace/forward?lot=X|serial=Y    GET .../trace/backward?serial=Y    POST .../trace/recall-scope
+GET/POST /api/pdm/md/access-requests    PUT .../access-requests/:id/decision|revoke    GET/POST .../access-reviews
+```
+### Core Logic
+1. Released BOM/spec/drawing/routing direct edit nahi hota. Change Engine se, effectivity ke saath.
+2. Item create/change validation rules aur duplicate check (fuzzy match) se guzarta hai, DQ score threshold se neeche to approval mein extra step.
+3. BOM explode multi-level, phantom ko pass-through, effectivity date/lot/serial par resolve. Cycle detection mandatory.
+4. EBOM released hone par MBOM draft auto-generate hota hai (plant-specific edits ke saath). As-designed vs as-built compare available.
+5. BOM compliance roll-up component-level declarations se: ek banned substance mile to parent products flag.
+6. Costed BOM = sum(qty x std cost x (1 + scrap)) + routing cost, target cost (Module 1) se compare.
+7. Genealogy: har production event par component lot/serial se finished lot/serial link banta hai. Recall-scope generator forward trace se affected distribution list deta hai (Module 8).
+8. Auto-classification confidence threshold se neeche manual review.
+9. Access grants time-boxed, SoD conflict par block, expiry par auto-revoke, quarterly recertification.
+10. Export-controlled (ECCN) item ka data sirf allowed roles/countries ko.
+11. `audit_log` har action pe.
+
+---
+
+# MODULE 5: Discovery Research & Idea Management (2.2.1, 2.2.2)
+
+### FRONTEND: Screen 5: Innovation Management (4 tabs)
+
+**Tab 1. Discovery Research** (2.2.1.1, 2.2.1.2, 2.2.1.3)
+- Technology radar: signals (patents, papers, startups, vendors, standards, competitors), ring (assess/trial/adopt/hold), strategic themes.
+- Technology development: projects with TRL tracking (1-9), experiments/lab log, partners (universities, labs), grants, budget.
+- Feasibility assessment: technical, commercial, integration fit, build/buy/partner, cost, risk, TRL gap, PoC results, decision.
+
+**Tab 2. Idea Intake** (2.2.2.1)
+- Channels: employee portal, customer feedback, support tickets, sales/field, social listening, partners/suppliers, app-store reviews, hackathons/challenges.
+- Voice-of-customer repository with consent, requirement capture, duplicate detection/merge, voting and comments, campaigns, anonymous option.
+
+**Tab 3. Analysis & Evaluation** (2.2.2.2, 2.2.2.3)
+- Analysis: theme clustering, sentiment, Kano, jobs-to-be-done, market sizing, competitor mapping, requirement quality check.
+- Evaluation: scorecard (value, feasibility, fit, risk, effort), panel scoring rounds, quick-win vs big-bet matrix.
+- Decision (advance/park/reject) with reason code, aur submitter ko feedback mandatory.
+
+**Tab 4. Concepts & Improvements** (2.2.2.4, 2.2.2.5)
+- Concept brief: value proposition, segment, positioning, key features, business model, rough economics, risks, IP position, regulatory path. Variants and concept tests (survey/conjoint/interviews).
+- Improvement backlog for existing products: sources (warranty, tickets, reviews, field data), impact/effort, route to offering modification (Module 1) ya ECR.
+
+### BACKEND: Tables
+```
+tech_sources (id, name, source_type, feed_ref, status)
+tech_signals (id, source_id, title, summary, url, signal_type, detected_on, relevance_score, status)
+technologies (id, name, category, trl, ring[assess/trial/adopt/hold], owner_id, strategic_themes_json, status)
+tech_dev_projects (id, technology_id, name, objective, start_date, end_date, budget, currency, trl_start, trl_target, trl_current, partner_ids_json, grant_ref, status)
+trl_history (id, project_id, trl, assessed_on, evidence_doc_id)
+experiments (id, project_id, hypothesis, method, results_json, conclusion, document_id)
+feasibility_assessments (id, subject_type[technology/concept], subject_id, technical_score, commercial_score, integration_score, risks_json, sourcing_option[build/buy/partner], cost_estimate, currency, decision, approval_request_id)
+idea_campaigns (id, title, brief, start_date, end_date, audience_json, reward_json, status)
+ideas (id, title, description, source_channel, campaign_id, submitter_id, is_anonymous, product_id, category, tags_json, status[submitted/screening/evaluating/approved/parked/rejected/converted], duplicate_of_id, submitted_on)
+idea_votes (id, idea_id, voter_id, vote)
+voc_items (id, source_type, raw_text, sentiment, themes_json, product_id, segment, consent_ref, captured_on)
+requirement_inputs (id, idea_id, voc_id, statement, type, priority, source_party_id, status)
+idea_themes (id, name, method, member_ids_json, size, trend)
+evaluation_models (id, name, criteria_json, version, status)
+idea_evaluations (id, idea_id, model_id, scores_json, total, evaluator_id, round, notes)
+idea_decisions (id, idea_id, decision, reason_code_id, feedback_to_submitter, decided_by, decided_on)
+concepts (id, name, idea_ids_json, value_prop, target_segment, positioning, key_features_json, business_model_json, economics_json, risks_json, ip_position, regulatory_path, version, status)
+concept_tests (id, concept_id, method, sample_size, results_json, conclusion)
+improvement_items (id, product_id, source_type, source_ref, description, impact_score, effort_score, status, routed_to_type[offering_mod/eco/backlog], routed_to_id)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/innovation/technologies    GET/POST .../signals    GET/POST/PUT .../tech-projects    POST .../tech-projects/:id/trl
+GET/POST/PUT /api/pdm/innovation/feasibility
+GET/POST/PUT /api/pdm/innovation/campaigns    GET/POST/PUT .../ideas    POST .../ideas/:id/vote|merge
+GET/POST /api/pdm/innovation/voc    POST .../voc/ingest    GET .../themes
+GET/POST/PUT /api/pdm/innovation/evaluation-models    POST .../ideas/:id/evaluate|decide
+GET/POST/PUT /api/pdm/innovation/concepts    POST .../concepts/:id/test    POST .../concepts/:id/to-portfolio
+GET/POST/PUT /api/pdm/innovation/improvements    POST .../improvements/:id/route
+```
+### Core Logic
+1. Signals feed integrations se aate hain, relevance score themes + keywords se.
+2. TRL change evidence document ke bina nahi. TRL target tak pahunchne par feasibility assessment trigger.
+3. Duplicate detection similarity threshold (config) par, merge karne par votes/comments combine.
+4. VoC ingest mein PII masking aur consent check, consent na ho to analytics mein nahi.
+5. Evaluation weights `evaluation_models` se, panel average (outlier trim optional).
+6. Decision par submitter ko feedback notification mandatory, reject mein reason code.
+7. Concept approved hone par `portfolio_items` (Module 1 Tab 2) ban jata hai. Concept mein regulatory path Module 3 applicability se prefill.
+8. Improvement backlog auto-suggest: warranty claim clusters (Module 8), post-launch quality (Module 2), field data se.
+9. Patentable idea ho to invention disclosure (Module 3) link ke saath, confidentiality control.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 6: Product & Service Requirements (2.2.3)
+
+### FRONTEND: Screen 6: Requirements Management (4 tabs)
+
+**Tab 1. Functional & Interoperability** (2.2.3.1.1, 2.2.3.1.2)
+- Requirement tree: stakeholder to system to subsystem to component. Fields: statement (template-checked), rationale, priority (MoSCoW), verification method (test/analysis/inspection/demo), acceptance criteria, owner, baseline.
+- Interoperability: interface register (ICD), protocols/standards, compatibility matrix, backward compatibility, third-party integration requirements.
+
+**Tab 2. Safety, Security, Regulatory & Standards** (2.2.3.1.3 to 2.2.3.1.6)
+- Safety: hazard analysis (HARA/FMEA/FTA), risk matrix, safety class, mitigation requirements.
+- Security: threat model (STRIDE), security controls mapped to frameworks, vulnerability handling process, SBOM and secure-update requirements.
+- Regulatory: requirements auto-derived from Module 3 applicability engine.
+- Standards: standards library with clause-level derivation, version tracking, compliance matrix (requirement x clause x evidence).
+
+**Tab 3. UX & Services-as-a-Product** (2.2.3.1.7, 2.2.3.1.8)
+- UX: personas, journeys, accessibility level (WCAG etc.), usability targets, localization needs, research evidence.
+- Services-as-a-product: scope, tiers, SLAs, pricing model (subscription/usage/outcome), entitlements, onboarding/exit, dependencies, service blueprint, metering and billing requirements.
+
+**Tab 4. Support Model & Bundling** (2.2.3.2, 2.2.3.3)
+- Post-launch support: tiers, channels, hours, SLAs, spare parts strategy, repair vs replace, remote diagnostics, update cadence, end-of-support policy, cost-to-serve.
+- Bundling: affinity/attach-rate analysis, bundle design (components, pricing rules, constraints), cannibalization, bundle P&L, regulatory impact.
+
+### BACKEND: Tables
+```
+requirement_sets (id, product_id, project_id, name, status)
+requirements (id, req_no, set_id, parent_id, level[stakeholder/system/subsystem/component], type[functional/interop/safety/security/regulatory/standard/ux/service/support/performance/environmental], statement, rationale, priority, verification_method, acceptance_criteria, source_type, source_id, owner_id, version, status, effective_from)
+requirement_baselines (id, set_id, baseline_no, frozen_on, approval_request_id)
+requirement_quality_checks (id, requirement_id, issues_json, checked_on)
+interfaces (id, name, type, party_a, party_b, protocol, spec_ref, version, requirement_ids_json)
+compat_matrix (id, product_version_id, counterpart_ref, status, notes)
+hazards (id, product_id, method, hazard, cause, effect, severity, probability, detectability, risk_level, mitigation_req_ids_json, residual_risk)
+safety_classifications (id, product_id, standard, class_level, rationale)
+threat_models (id, product_id, method, threats_json, mitigations_json, version)
+security_controls_map (id, requirement_id, framework, control_ref)
+standards (id, org, number, title, version, status, effective_from, withdrawn_on, harmonised_flag)
+standard_clauses (id, standard_id, clause_no, summary)
+compliance_matrix (id, requirement_id, clause_id, regulation_id, evidence_doc_id, status)
+ux_personas (id, product_id, name, definition_json)
+ux_journeys (id, persona_id, stages_json, pain_points_json)
+ux_targets (id, requirement_id, accessibility_level, usability_target_json)
+service_offerings (id, name, product_id, scope, tiers_json, sla_json, pricing_model, entitlements_json, dependencies_json, status)
+service_blueprints (id, offering_id, steps_json)
+support_models (id, product_id, tiers_json, channels_json, hours, sla_json, parts_strategy_json, update_policy_json, eos_policy_json, cost_to_serve_json, version)
+bundle_opportunities (id, name, components_json, source[affinity/manual], attach_rate, est_uplift, cannibalization_json, status)
+bundles (id, product_id, components_json, pricing_rule_json, constraints_json, effective_from)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/req/sets    GET/POST/PUT .../requirements    POST .../requirements/:id/check    POST .../sets/:id/baseline
+GET .../requirements/coverage?set=X    GET .../requirements/trace?id=X
+GET/POST/PUT /api/pdm/req/interfaces    GET/PUT .../compat-matrix
+GET/POST/PUT /api/pdm/req/hazards    GET/POST/PUT .../threat-models    GET/PUT .../controls-map
+GET/POST/PUT /api/pdm/req/standards    GET/PUT .../compliance-matrix    POST .../requirements/derive-regulatory?product=X&market=Y
+GET/POST/PUT /api/pdm/req/ux    GET/POST/PUT .../service-offerings
+GET/POST/PUT /api/pdm/req/support-models    GET .../bundles/opportunities    POST/PUT .../bundles
+```
+### Core Logic
+1. Har requirement ka verification method aur source trace zaruri, warna baseline freeze block.
+2. Statement quality check (ambiguous words, missing measurable criteria).
+3. Hazard severity threshold se upar ho to mitigation requirement mandatory.
+4. Regulatory requirements Module 3 applicability se auto-derive. Applicability badalne par naye requirements draft mein.
+5. Standard version badalne par linked requirements `suspect_flag`, review task.
+6. Baseline freeze ke baad change Change Engine se. Requirement coverage % (design/test links) Module 7 gates ko feed karta hai.
+7. Support model ka cost-to-serve target cost (Module 1) mein add. Warranty linkage Module 8 se.
+8. Bundle design mein components ke warranty/regulatory conflicts check, bundle ka effective warranty rule Module 8 se.
+9. Service offering SLA metering requirements billing/ERP integration ko jati hain.
+10. `audit_log` har action pe.
+
+---
+
+# MODULE 7: Design, Prototype, Test Market & Production Readiness (2.3.1, 2.3.2, 2.3.3)
+
+### FRONTEND: Screen 7: Product Development Workspace (7 tabs)
+
+**Tab 1. Project, Resources & Partners** (2.3.1.1, 2.3.1.1.1)
+- Project from gate template: WBS, milestones, budget, risks.
+- Resource assignment: role, skills, % allocation, capacity heatmap (HR module se).
+- Partner requirements: capability needs, selection criteria, RFP, NDA/IP terms, SOW, onboarding, scorecard.
+
+**Tab 2. Business Case, Specs & UX Design** (2.3.1.2, 2.3.1.3, 2.3.1.4, 2.3.1.6)
+- High-level business case + technical assessment (versions, NPV, risk).
+- Design specs linked to requirements, UX design specs (wireframes, prototype links, design tokens, accessibility notes).
+- Design documentation: design dossier auto-assembled (reviews, decisions, change history, DHF).
+
+**Tab 3. Design-for-X & Warranty Recommendations** (2.3.1.5, 2.3.1.8.1 to 2.3.1.8.6)
+- DFM/DFA, design for servicing, re-manufacturing/circularity, troubleshooting methodology review (fault trees, diagnostic flows, service manuals), design for upgrades (modularity, firmware, backward compatibility).
+- Product data, design and BOM management: CAD to PLM sync, BOM authored from design (Module 4).
+- Warranty recommendations: reliability-based risk, suggested terms, send to Module 8.
+
+**Tab 4. Prototyping & Testing** (2.3.1.9 to 2.3.1.12)
+- Builds: PoC/alpha/beta/EVT/DVT/PVT, build records, prototype BOM.
+- Prototype production/service delivery process trials.
+- Test plans linked to requirements, execution, results, reliability tests (life/HALT, Weibull/MTBF), software CI/CD results.
+- Problem reports (8D/CAPA, root cause, verification), in-house feasibility evaluation.
+
+**Tab 5. External Reviews, Indicators & Collaboration** (2.3.1.7, 2.3.1.13, 2.3.1.14)
+- Mandatory external reviews (labs, notified bodies, certifiers) aur elective (customer design review, advisory board, pen-test): schedule, findings.
+- Design/development indicators: schedule variance, requirement churn, defect escape, design maturity, change count, prototype first-pass yield.
+- Supplier/partner collaboration: shared workspaces with controlled access, early supplier involvement, design data exchange, markups, partner change requests.
+
+**Tab 6. Test Market** (2.3.2.1 to 2.3.2.4)
+- Detailed market study (segmentation, sizing, competitors, pricing research).
+- Test market plan (geo, channel, duration, sample), customer tests and interviews (recruit, consent, scripts, recordings, coding), pilot sales and price tests.
+- Finalize characteristics and business case, finalize technical requirements (baseline freeze), go/no-go to production.
+
+**Tab 7. Production / Service Delivery Readiness** (2.3.3.1 to 2.3.3.5)
+- Capabilities, materials, equipment: capex requests, tooling, long-lead items, supplier PPAP.
+- Process change requirements and engineering/process change requests (ECR/ECO).
+- Install and validate: IQ/OQ/PQ, line trials, process capability (Cpk), first-article, initial production run monitoring (yield/defect dashboard) (2.3.3.4.1), hypercare for services.
+- Launch procedures validation: runbooks, dry-run, rollback plan, training, readiness sign-offs, handover to operations.
+
+### BACKEND: Tables
+```
+project_wbs (id, project_id, parent_id, name, owner_id, start_date, end_date, status, effort_hours)
+project_milestones (id, project_id, name, due_date, completed_on, gate_code)
+project_budgets (id, project_id, category, planned, actual, currency)
+resource_assignments (id, project_id, employee_id, role, skill_id, allocation_pct, from_date, to_date)
+partner_requirements (id, project_id, capability_needed, criteria_json, status)
+partner_engagements (id, project_id, party_id, nda_doc_id, sow_doc_id, ip_terms_json, start_date, end_date, access_scope_json, scorecard_json, status)
+business_cases (id, project_id, version, assumptions_json, cash_flows_json, npv, irr, payback_months, risks_json, tech_assessment_json, currency, status)
+design_specs (id, project_id, spec_type, title, content, version, requirement_ids_json, status)
+ux_design_specs (id, project_id, wireframe_refs_json, prototype_url, design_tokens_json, accessibility_notes, version)
+design_dossiers (id, product_version_id, assembled_on, contents_json, document_id)
+dfx_analyses (id, product_version_id, dfx_type[dfm/dfa/dfs/dfr/upgrade/troubleshooting], checklist_json, findings_json, score, reviewer_id, status)
+troubleshooting_models (id, product_version_id, fault_tree_json, diagnostic_flow_json, manual_doc_id, review_status)
+warranty_recommendations (id, product_version_id, reliability_basis_json, recommended_terms_json, risk_level, status)
+prototype_builds (id, project_id, build_type[poc/alpha/beta/evt/dvt/pvt], build_no, bom_id, qty, built_on, location_id, status)
+prototype_process_trials (id, project_id, process_ref, results_json, issues_json, status)
+test_plans (id, project_id, name, type[functional/reliability/safety/security/performance/usability], status)
+test_cases (id, plan_id, title, requirement_ids_json, steps_json, expected_result, status)
+test_runs (id, test_case_id, build_id, run_by, run_on, result[pass/fail/blocked], evidence_doc_id, defect_ref)
+reliability_tests (id, test_plan_id, method, sample_size, duration_hours, failures, mtbf, weibull_json, conclusion)
+problem_reports (id, project_id, source_ref, severity, description, root_cause, corrective_action, verification, status[open/analysis/fix/verified/closed])
+feasibility_evals (id, project_id, criteria_json, result, decided_by, decided_on)
+external_reviews (id, project_id, review_type, mandatory, party_id, scheduled_date, scope, outcome, findings_json, status)
+dev_indicators (id, project_id, period, schedule_variance_pct, requirement_churn_pct, defect_escape_pct, maturity_score, change_count, proto_fpy_pct)
+collab_workspaces (id, project_id, party_id, access_policy_id, scope_json, status)
+collab_exchanges (id, workspace_id, document_id, direction, exchanged_on, approved_by)
+market_studies (id, project_id, segmentation_json, sizing_json, competitors_json, pricing_json, document_id, version)
+test_market_plans (id, project_id, geos_json, channels_json, start_date, end_date, sample_json, status)
+customer_tests (id, plan_id, participant_ref, consent_ref, method, notes, coded_themes_json, recording_doc_id, conducted_on)
+pilot_sales (id, plan_id, period, units, revenue, conversion_pct, repeat_pct, price_point, currency)
+production_readiness_items (id, project_id, category[capability/material/equipment/process/launch], item, owner_id, due_date, status, evidence_doc_id)
+capex_requests (id, project_id, description, amount, currency, approval_request_id, status)
+process_change_requests (id, project_id, change_request_id, description, plants_json, status)
+validation_runs (id, project_id, validation_type[iq/oq/pq/line_trial/first_article/cpk], plant_id, results_json, passed, run_on)
+initial_run_monitors (id, project_id, run_no, units, yield_pct, defect_pct, issues_json, status)
+launch_procedures (id, project_id, procedure_type[runbook/dry_run/rollback/training], document_id, validated_on, validated_by, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/dev/projects    GET .../projects/:id/wbs|milestones|budget|resources    POST .../projects/:id/gate-review
+GET/POST/PUT /api/pdm/dev/partners    GET/POST/PUT .../business-cases    GET/POST/PUT .../design-specs    POST .../design-dossier/assemble
+GET/POST/PUT /api/pdm/dev/dfx    GET/POST/PUT .../troubleshooting    GET/POST .../warranty-recommendations
+GET/POST/PUT /api/pdm/dev/builds    GET/POST/PUT .../test-plans    GET/POST .../test-runs    GET/POST/PUT .../reliability    GET/POST/PUT .../problem-reports
+GET/POST/PUT /api/pdm/dev/external-reviews    GET .../indicators    GET/POST/PUT .../workspaces    POST .../workspaces/:id/exchange
+GET/POST/PUT /api/pdm/dev/market-studies    GET/POST/PUT .../test-markets    GET/POST .../customer-tests    GET/POST .../pilot-sales    POST .../test-markets/:id/finalize
+GET/POST/PUT /api/pdm/dev/readiness    GET/POST .../capex    GET/POST .../validation-runs    GET/POST .../initial-run-monitor    GET/POST/PUT .../launch-procedures
+```
+### Core Logic
+1. Project gate template se banta hai. Gate review mein criteria + evidence + quorum, "conditional go" mein conditions track hoti hain.
+2. Resource assignment capacity check karta hai (HR skills + availability), over-allocation par warning.
+3. Partner access sirf `collab_workspaces` ke scope mein, NDA signed hone tak block. Export-control aur IP classification dono apply.
+4. Design spec har requirement se trace, requirement coverage < threshold to gate fail.
+5. Test case result fail hone par problem report auto-create, requirement ka verification status "not met". Defects Jira/Azure DevOps ke saath sync.
+6. Reliability test result se MTBF/Weibull calc, warranty recommendation (Module 8) ko feed.
+7. DFX checklists project type se config, unresolved critical finding par gate hold.
+8. Design change CAD/PLM mein aaye to BOM (Module 4) ka draft revision aur impacted requirements/tests `suspect_flag`.
+9. Customer tests mein consent mandatory, consent na ho to data stored nahi. Region-wise privacy rules `country_config` se.
+10. Test market finalize par business case v-final aur requirement baseline freeze.
+11. Production readiness: mandatory items complete + validation runs passed (IQ/OQ/PQ, Cpk threshold) hone par hi launch plan (Module 2) readiness green. Initial run monitor ke defect threshold cross par auto-alert aur hold.
+12. Launch procedures validated hone tak production release block.
+13. Sab project actuals Module 1 ke targets ke saath variance mein.
+14. `audit_log` har action pe.
+
+---
+
+# MODULE 8: Warranty & Recall (2.3.4, 2.3.5)
+
+### FRONTEND: Screen 8: Warranty and Recall Management (5 tabs)
+
+**Tab 1. Warranty Policies** (2.3.4.1)
+- Policy designer: coverage (parts/labour/travel/software), term (time/usage, whichever first), exclusions, transferability, geography, conditions.
+- Accounting classification: assurance-type vs service-type (finance/revenue treatment), local statutory minimums per country, legal review, translations, version with effective dates.
+
+**Tab 2. Claim Rules & Codes** (2.3.4.2)
+- Claim code library (symptom, defect, cause, repair, part) hierarchical, per product.
+- Rule engine: coverage validation (serial/purchase date/usage), labour time standards, parts pricing, auto-approve limits, approval matrix.
+- Fraud flags: duplicate, out-of-window, high-frequency claimant, inflated labour, anomaly score. Rule simulator.
+
+**Tab 3. Supplier Warranty** (2.3.4.3)
+- Agreement: component-wise liability %, term, failure-rate thresholds, epidemic-failure clause, labour reimbursement, cost split.
+- Recovery workflow: chargeback/return-to-vendor, RCA request, dispute tracking. Supplier scorecard: recovery accepted/requested, dispute rate, days-to-recover.
+
+**Tab 4. Customer Offerings & Communication** (2.3.4.4, 2.3.4.5)
+- Offerings: standard, extended, service plans, accidental damage, subscription care. Eligibility, pricing per country/currency, bundled-with-product option.
+- Communication: warranty terms in packaging/manual/website/app, registration and proof-of-purchase, partner/dealer notices, multi-language, acknowledgement log, attach-rate analytics.
+
+**Tab 5. Recall Strategy** (2.3.5)
+- Recall readiness plan per product/market: decision framework (hazard severity x probability x exposure), action options (stop-ship, hold, field correction, replace, refund, OTA fix, public notice).
+- Regulator notification matrix (jurisdiction, authority, clock, form), recall team and escalation clocks.
+- Affected-population scoping (lot/serial forward trace), communication plans, reverse logistics, effectiveness checks, mock-recall exercises (time-to-trace KPI), cost and reserve, closure and lessons learned.
+- Live recall cases (execution tracker) isi tab mein.
+
+### BACKEND: Tables
+```
+warranty_policies (id, name, product_id, family_id, coverage_json[parts/labour/travel/software], term_months, usage_limit, usage_unit, exclusions_json, transferable, conditions_json, accounting_type[assurance/service], statutory_floor_json, country_id, version, effective_from, status, approval_request_id)
+warranty_reserve_methods (id, policy_id, method, claim_rate_basis[cohort], params_json, effective_from)
+claim_codes (id, code_type[symptom/defect/cause/repair/part], code, label, parent_id, product_id, status)
+claim_rules (id, name, product_id, rule_json[coverage_check/auto_approve_limit/labour_std/parts_price], priority, effective_from, status)
+labour_standards (id, repair_code_id, product_id, std_hours, rate, currency)
+warranty_claims (id, claim_no, serial_id, product_id, customer_ref, claim_date, symptom_code_id, defect_code_id, cause_code_id, repair_code_id, parts_json, labour_hours, amount, currency, status, fraud_score, decision, decided_by)
+fraud_rules (id, name, rule_json, threshold, action[flag/hold/reject], status)
+supplier_warranty_agreements (id, supplier_id, component_item_id, liability_pct, term_months, failure_threshold_json, epidemic_clause_json, labour_reimbursement_json, cost_split_json, contract_doc_id, effective_from, status)
+supplier_recoveries (id, claim_id, supplier_id, amount_requested, amount_accepted, currency, status[requested/accepted/disputed/rejected/recovered], rca_ref, requested_on, recovered_on)
+warranty_offerings (id, name, offering_type[standard/extended/service_plan/accidental/subscription_care], product_id, eligibility_json, pricing_json, term_months, accounting_type, bundled_flag, status)
+warranty_communications (id, policy_id, channel[packaging/manual/web/app/dealer_notice], language_code, content_ref, published_on, status)
+warranty_registrations (id, serial_id, customer_ref, purchase_date, proof_doc_id, registered_on)
+recall_strategies (id, product_id, market_id, decision_framework_json, action_options_json, team_json, escalation_clocks_json, notification_matrix_json, comms_template_ids_json, version, status)
+recall_cases (id, case_no, product_version_id, trigger_source[field/warranty/test/regulator/supplier], hazard_json, severity_class, decision, scope_json, opened_on, closed_on, status)
+recall_scope_items (id, case_id, lot_id, serial_id, qty, distribution_status, units_located, units_remedied)
+recall_notifications (id, case_id, authority_id, due_at, sent_at, reference_no, status)
+recall_actions (id, case_id, action_type, owner_id, due_date, status)
+recall_effectiveness_checks (id, case_id, check_level, sample_size, response_pct, correction_pct, findings_json, checked_on)
+recall_exercises (id, strategy_id, run_on, time_to_trace_min, gaps_json, status)
+recall_costs (id, case_id, category, amount, currency, insurance_recovery)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/pdm/warranty/policies    POST .../policies/:id/submit    GET .../policies/:id/versions
+GET/POST/PUT /api/pdm/warranty/claim-codes    GET/POST/PUT .../claim-rules    POST .../claim-rules/simulate
+GET/POST/PUT /api/pdm/warranty/claims    POST .../claims/:id/adjudicate    GET/POST/PUT .../fraud-rules
+GET/POST/PUT /api/pdm/warranty/supplier-agreements    GET/POST/PUT .../recoveries    GET .../suppliers/:id/scorecard
+GET/POST/PUT /api/pdm/warranty/offerings    GET/POST/PUT .../communications    POST .../registrations
+GET/POST/PUT /api/pdm/recall/strategies    POST .../strategies/:id/mock-run
+GET/POST/PUT /api/pdm/recall/cases    POST .../cases/:id/scope    POST .../cases/:id/notify    GET/POST .../cases/:id/effectiveness    GET .../cases/:id/cost
+```
+### Core Logic
+1. Warranty policy ka accounting_type finance ko jata hai: assurance-type to reserve/accrual, service-type to separate performance obligation (deferred revenue). Reserve = units sold x expected claim rate x avg cost per claim, claim rate cohort-wise.
+2. Policy country ke statutory floor se kam nahi ho sakti (higher-of rule). Naye policy version se purane serials par purani terms apply (serial ke sale date ke hisaab se).
+3. Claim intake par coverage check: serial + purchase date/registration + usage, claim codes mandatory, labour standard se compare.
+4. Auto-approve sirf limit ke andar aur fraud score low hone par. Fraud rules (duplicate, out-of-window, high-frequency claimant, cost outliers) + anomaly model, flag par manual review.
+5. Supplier recovery: component-level liability % aur failure thresholds se auto-eligibility. Recovery rate = accepted / requested. Dispute par RCA request, scorecard Module 4/Procurement ko feed.
+6. Claim clusters (same defect code/lot) threshold cross karein to early-warning alert, improvement item (Module 5), problem report (Module 7) aur recall evaluation trigger.
+7. Recall decision framework (severity x probability x exposure) se recommended action, final decision quorum approval ke saath. Decision ka reasoning documented.
+8. Recall case open hote hi traceability (Module 4) se affected lots/serials aur customers ka forward trace, aur lots `status = recalled/blocked`, ERP mein stop-ship.
+9. Regulator notifications `notification_matrix` + `regulatory_clock_rules` (Module 3) se auto-schedule, clock breach par exec escalation. Progress/status reports periodic due dates ke saath.
+10. Effectiveness checks (response %, correction %) target se neeche to additional outreach action auto-create.
+11. Mock recall exercises: time-to-trace KPI, gaps closure tasks. Recall records retention Module 3 retention rules se.
+12. Recall/warranty costs Ledger ko, aur reserve adjustments Finance ko.
+13. `audit_log` har action pe.
+
+---
+
+# COVERAGE MATRIX (APQC 2.0 to tab)
+
+| APQC code(s) | Covered in |
+|---|---|
+| 2.1.1.1 | M1 T1 Portfolio Performance |
+| 2.1.1.2, 2.1.1.3 | M1 T2 Alignment & Prioritization |
+| 2.1.1.4, 2.1.1.5 | M1 T3 Targets |
+| 2.1.1.6 | M1 T4 Offering Modifications |
+| 2.1.2.1 | M2 T1 Launch Plan |
+| 2.1.2.2 | M2 T2 Introduction & Rollout |
+| 2.1.2.3 | M2 T3 Retirement |
+| 2.1.2.4 | M2 T4 Performance Indicators |
+| 2.1.2.5.1 to 2.1.2.5.4 | M2 T5 Market & Supply Chain |
+| 2.1.2.5.5 to 2.1.2.5.7 | M2 T6 Quality, Financial & Process |
+| 2.1.3.1 | M3 T1 Reviews |
+| 2.1.3.2 | M3 T3 Infringement |
+| 2.1.3.3 | M3 T2 IP Needs & Portfolio |
+| 2.1.3.4 | M3 T4 Technical Documentation |
+| 2.1.3.5, 2.1.3.5.1 to 2.1.3.5.3 | M3 T5 Regulatory Management |
+| 2.1.4.1 | M4 T1 Materials Master |
+| 2.1.4.2 | M4 T2 BOM |
+| 2.1.4.3, 2.1.4.8 | M4 T3 Routings & Process Specs |
+| 2.1.4.4, 2.1.4.5, 2.1.4.7 | M4 T4 Specs, Drawings & Quality Docs |
+| 2.1.4.6, 2.1.4.9 | M4 T5 Classification & Traceability |
+| 2.1.4.10 | M4 T6 Data Access Requests |
+| 2.2.1.1 to 2.2.1.3 | M5 T1 Discovery Research |
+| 2.2.2.1 | M5 T2 Idea Intake |
+| 2.2.2.2, 2.2.2.3 | M5 T3 Analysis & Evaluation |
+| 2.2.2.4, 2.2.2.5 | M5 T4 Concepts & Improvements |
+| 2.2.3.1.1, 2.2.3.1.2 | M6 T1 Functional & Interoperability |
+| 2.2.3.1.3 to 2.2.3.1.6 | M6 T2 Safety, Security, Regulatory & Standards |
+| 2.2.3.1.7, 2.2.3.1.8 | M6 T3 UX & Services-as-a-Product |
+| 2.2.3.2, 2.2.3.3 | M6 T4 Support Model & Bundling |
+| 2.3.1.1, 2.3.1.1.1 | M7 T1 Project, Resources & Partners |
+| 2.3.1.2, 2.3.1.3, 2.3.1.4, 2.3.1.6 | M7 T2 Business Case, Specs & UX Design |
+| 2.3.1.5, 2.3.1.8, 2.3.1.8.1 to 2.3.1.8.6 | M7 T3 Design-for-X & Warranty Recs (8.5 ka data M4 se synced) |
+| 2.3.1.9 to 2.3.1.12 | M7 T4 Prototyping & Testing |
+| 2.3.1.7, 2.3.1.13, 2.3.1.14 | M7 T5 External Reviews, Indicators & Collaboration |
+| 2.3.2.1 to 2.3.2.4 | M7 T6 Test Market |
+| 2.3.3.1 to 2.3.3.5, 2.3.3.4.1 | M7 T7 Production Readiness |
+| 2.3.4.1 | M8 T1 Warranty Policies |
+| 2.3.4.2 | M8 T2 Claim Rules & Codes |
+| 2.3.4.3 | M8 T3 Supplier Warranty |
+| 2.3.4.4, 2.3.4.5 | M8 T4 Customer Offerings & Communication |
+| 2.3.5 | M8 T5 Recall Strategy |
+
+**Count check:** M1 = 4, M2 = 6, M3 = 5, M4 = 6, M5 = 4, M6 = 4, M7 = 7, M8 = 5. Total **8 screens, 41 tabs**, aur APQC ke saare process codes (2.1.1.1 se 2.3.5 tak) kisi na kisi tab mein mapped hain.
+
+Ab infra/security layer ke baad ya usse pehle, kisi module ko aur deep karna hai (jaise Module 8 ka recall execution ya Module 4 ka BOM engine)?

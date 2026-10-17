@@ -1,0 +1,823 @@
+Haan bhai, dunga. Pehle research karta hu, phir poori guide.# Research se kya nikla
+
+- **IR (Investor Relations):** Modern IR platforms investor/analyst contacts ka CRM, earnings call aur webcast hosting, aur shareholder ownership tracking ek jagah dete hain. Compliance side pe Reg FD (US), MAR (EU), safe-harbor language, aur earnings materials ke embargo/blackout windows set hote hain.
+- **Lobbying aur Government:** US mein quarterly LD-2 reports aur semiannual LD-203 contributions reports lagte hain, aur time tracking mein lobbying aur non-lobbying kaam alag dikhna chahiye. Iske saath FARA, gift aur ethics rules ka integrated framework chahiye.
+- **Legal Ops:** Platforms e-billing, matter management, intake/triage aur workflow automation dete hain. LEDES files UTBMS codes ke saath phase/task wise classification karti hain aur invoice auto-validate hota hai. Trend ye hai ki matter management, spend, CLM aur e-billing ek lifecycle (request → contract → dispute → invoice) mein jud rahe hain.
+- **IP:** Enterprise IP tools patent/trademark docketing, renewals/annuities, outside counsel coordination aur audit-ready records ke saath aate hain, aur invention intake se prosecution, maintenance aur enforcement tak poora lifecycle cover karte hain.
+
+Structure wahi hai jo 11.0 wali guide ka tha (Common Foundation, Modules, Frontend tabs, Tables, APIs, Core Logic). **Total 6 Screens / 25 Tabs**, aur chart ke saare 42 leaf items covered hain (last mein coverage matrix).
+
+---
+
+# COMMON FOUNDATION (sab External Relationship modules pe lagu)
+
+**Common rules:** API prefix `/api/ext/...`. Har create/edit/action `audit_log` mein jayega. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath hoga (delete nahi, disable). Har table mein `entity_id` hoga (multi-company). Policy, threshold, SLA aur country rules **config tables** mein rahenge, hardcode nahi.
+
+**Reuse hone wali tables (pichli guides se):** `audit_log`, `approval_workflows`, `approval_requests`, `approval_actions`, `approval_delegations`, `notifications`, `documents`, `comments`, `custom_fields`, `custom_objects`, `legal_entities`, `countries`, `country_config`, `currencies`, `exchange_rates`, `translations`, `fiscal_calendars`, `org_units`, `locations`, `reason_codes`, aur GRC foundation ki `grc_taxonomy`, `grc_links`, `grc_issues`, `grc_actions`, `grc_evidence`, `regulators`, `third_parties`, `controls`, `obligations`, `attestations`, `gifts_hospitality`.
+
+**(NEW) External Relations foundation tables:**
+```
+external_parties (id, entity_id, party_type[lender/rating_agency/analyst/institutional_investor/shareholder/government_body/quasi_govt_agency/industry_group/media_outlet/community_org/law_firm/consultant/other], name, country, tier, owner_id, status)  -- sab bahari log/sansthaen ek master mein
+external_contacts (id, party_id, name, role, email, phone, is_govt_official (flag), is_pep (flag), consent_json, language_code, status)  -- govt official flag anti-bribery checks trigger karta hai
+stakeholder_interactions (id, party_id, contact_id, interaction_type[meeting/call/email/event/filing/letter/inspection/other], interaction_date, our_participants_json, summary, topics_json, commitments_json, document_ids_json, confidentiality[normal/restricted/privileged], created_by)  -- ek universal contact log, har module yahi use karega
+stakeholder_commitments (id, interaction_id, party_id, commitment, owner_id, due_date, status)
+comm_calendar (id, calendar_type[earnings/agm/filing/board/regulatory/lobbying/pr/legal/ip], title, event_date, owner_id, status, ref_module, ref_id)  -- ek combined external-events calendar
+authorized_spokespersons (id, user_id, topics_json, party_types_json, languages_json, effective_from, effective_to)  -- kaun kisse kya bol sakta hai
+mnpi_projects (id, project_code, description, opened_on, closed_on, status)  -- price-sensitive/inside information projects
+insider_list (id, mnpi_project_id, person_ref_type[employee/external], person_ref_id, added_on, removed_on, acknowledged_on)
+trading_windows (id, entity_id, window_type[open/blackout/quiet_period], from_date, to_date, trigger_event, applies_to_json)
+disclosure_rules (id, country_id, regime[reg_fd/mar/local_listing_rules/custom], rule_json, effective_from)  -- selective disclosure aur timing rules config se
+legal_matters (id, matter_no, matter_type, title, status, owner_id, confidentiality[normal/restricted/privileged])  -- Module 4 ki master, par baaki modules bhi link karte hain
+```
+
+**(NEW) Common rules add:**
+- **Communication governance:** Bahar ki har communication (investor, media, government, regulator) sirf `authorized_spokespersons` se. Unauthorized person ka outbound message ya meeting log hone par flag.
+- **Selective disclosure guard:** Material/price-sensitive info kisi ek party ko pehle nahi. Earnings se pehle quiet period/blackout `trading_windows` se auto-lagta hai, aur country ke `disclosure_rules` (Reg FD/MAR/local listing rules) ke hisaab se checks chalte hain.
+- **Anti-bribery guard:** Government official (`is_govt_official`) ke saath gift, hospitality, travel ya donation ka pre-approval zaruri, aur limit country config se.
+- **Privilege:** `privileged` interaction/document sirf Legal ko dikhta hai, export/print block, aur har access `audit_log` mein.
+- **Single interaction log:** Kisi bhi bahari party ke saath har baat-cheet `stakeholder_interactions` mein; commitments auto alag track hote hain.
+- **Maker-checker:** Press release, filing, board pack, lobbying report aur settlement jaisi cheezein banane wala khud approve nahi karega.
+- **Retention aur legal hold:** Retention policy config se, par legal hold lagne par delete/archive block.
+- **Contact data privacy:** External contacts ka consent aur data-retention config, aur data-subject request (access/delete) support.
+- **Multi-language aur multi-country:** Sab external-facing content `translations` se, aur filing/threshold rules country config se.
+
+**Dependencies (naam se):** Ledger/Finance, Treasury, Approval Engine, Notification Engine, Document Store, Procurement/AP, HRIS, GRC modules (11.0), Contract/Vendor Master, Analytics, E-signature, Email/Calendar, Media Monitoring feed, Wire/Distribution services, Exchange Filing system.
+
+---
+
+# MODULE 1: Investor & Board Relations (12.1, 12.3)
+
+## FRONTEND: Screen 1: Investor & Board Relations (4 tabs)
+
+**Tab 1. Lender Relations** (12.1.1)
+- Lender register: bank/bondholder/rating agency, facility, amount, tenor, rate, security, relationship manager, status
+- Lender relations plan: objectives, meeting cadence, owner, next touchpoint
+- (NEW) Covenant tracker: financial covenants (leverage, interest cover, DSCR), threshold, actual (Ledger se auto-pull), headroom, breach early-warning
+- (NEW) Compliance certificate calendar: due date, preparer, reviewer, submitted, lender acknowledgement
+- (NEW) Rating agency tracker: rating, outlook, review date, agency meeting prep pack, rating-trigger monitor
+- (NEW) Waiver/amendment log, refinancing calendar (maturity wall), lender group meeting log
+
+**Tab 2. Analyst Relations** (12.1.2)
+- Analyst register: firm, analyst, sector, coverage start, rating, target price, last estimate, relationship owner
+- Engagement plan: meetings, roadshows, conferences, analyst day, one-on-ones, follow-ups
+- (NEW) Consensus tracker: consensus vs company guidance (revenue, EPS, margin), estimate dispersion, and drift alerts
+- (NEW) Model-review guardrails: analyst ko diye gaye answers ka script check (no selective disclosure), and Q&A bank
+- (NEW) Sentiment/perception study: analyst feedback, rating changes timeline, and coverage gaps
+- (NEW) Earnings workflow: calendar, script, Q&A prep, disclosure-committee review, call hosting, transcript archive, post-call follow-up list
+- (NEW) Quiet-period auto-enforcement (earnings se pehle meetings block ya warn)
+
+**Tab 3. Shareholder Communications** (12.1.3)
+- Shareholder register analytics: top holders, institutional vs retail, geography, turnover, ownership changes
+- Communications plan: annual report, quarterly results, AGM/EGM notices, dividend/corporate action announcements, newsletters, investor days, website IR page
+- AGM/EGM management: notice, resolutions, record date, proxy/e-voting, voting results, minutes
+- (NEW) Shareholder identification (beneficial owner data import, country ke format), investor targeting/outreach lists
+- (NEW) Shareholder queries/grievances: ticket, SLA, category, resolution (dividend, transfer, e-voting)
+- (NEW) Stewardship/ESG engagement: proxy advisor feedback, say-on-pay/ESG resolutions tracking, engagement meetings log
+- (NEW) Corporate actions calendar: dividend, buyback, split, rights, bonus, record date, payment, unclaimed dividend tracker
+- (NEW) IR website content control (approved material only), regulatory announcement sync with exchange filing
+
+**Tab 4. Board Reporting: Results & Audit Findings** (12.3.1, 12.3.2)
+- Board/committee calendar: meeting date, agenda, pack due date, pre-read release, attendance, quorum, minutes, action tracker
+- Financial results reporting (12.3.1): results pack (P&L, balance sheet, cash flow, vs budget/forecast/prior year, segment, KPIs), CFO commentary, version lock, board approval, exchange filing link
+- Audit findings reporting (12.3.2): audit committee pack: internal audit findings summary, external auditor observations, management responses, overdue actions, whistleblower/ethics summary
+- (NEW) Board portal view: secure pre-read, watermark, annotations, e-voting/circular resolutions, read-receipt
+- (NEW) Director register: appointment, independence, committee membership, term, skills matrix, board evaluation, conflict declarations
+- (NEW) Auto-pull: Ledger se results, Module 11.0 ke Internal Audit se findings (audit findings ka duplicate entry nahi)
+- (NEW) Action tracker: board directions, owner, due date, auto-carry-forward to next pack
+
+### BACKEND: Tables
+```
+lenders (id, party_id, lender_type[bank/bondholder/dfi/rating_agency/other], rm_id, relationship_owner_id, status)
+debt_facilities (id, lender_id, facility_type, amount, currency, drawn_amount, rate_json, tenor_months, start_date, maturity_date, security_json, status)
+debt_covenants (id, facility_id, covenant_name, formula_json, threshold, direction[max/min], test_frequency, effective_from)
+covenant_tests (id, covenant_id, test_date, actual_value, headroom_pct, breach, source[ledger/manual], certified_by)
+lender_compliance_certs (id, facility_id, period, due_date, preparer_id, reviewer_id, submitted_on, lender_ack_ref, status)
+credit_ratings (id, rating_agency_party_id, rating, outlook, rating_date, next_review_date, triggers_json)
+lender_amendments (id, facility_id, amendment_type[waiver/amendment/refi], description, effective_date, fee, approval_request_id, document_id)
+lender_engagement_plans (id, lender_id, objectives, cadence, owner_id, next_touchpoint, status)
+analysts (id, party_id, firm_name, analyst_name, sector, coverage_start, rating, target_price, currency, last_estimate_json, rel_owner_id, status)
+analyst_engagements (id, analyst_id, engagement_type[meeting/roadshow/conference/analyst_day/call], date, participants_json, topics_json, followups_json, interaction_id)
+consensus_snapshots (id, period, metric, consensus_value, high, low, num_estimates, company_guidance, snapshot_date)
+earnings_events (id, period, event_date, quiet_period_start, status[planned/script_review/approved/held/archived])
+earnings_materials (id, event_id, material_type[script/qa_bank/press_release/presentation/transcript], version, document_id, disclosure_review_status, approved_by)
+disclosure_committee_reviews (id, ref_type, ref_id, reviewers_json, decision, comments, reviewed_on)
+shareholder_snapshots (id, snapshot_date, source, holder_name, holder_type[institutional/retail/promoter/insider/other], shares, pct, country, change_from_prev)
+shareholder_comm_plans (id, comm_type[annual_report/results/agm_notice/dividend/newsletter/investor_day/web], audience_segment_json, scheduled_date, owner_id, status, document_id, read_count)
+general_meetings (id, meeting_type[agm/egm/postal_ballot], record_date, meeting_date, notice_date, status, quorum_json, minutes_doc_id)
+meeting_resolutions (id, meeting_id, resolution_no, text, type[ordinary/special], votes_for, votes_against, abstain, result)
+corporate_actions (id, action_type[dividend/buyback/split/rights/bonus], announce_date, record_date, payment_date, terms_json, status)
+unclaimed_dividends (id, shareholder_ref, amount, currency, due_since, transfer_due_date, status)
+shareholder_queries (id, shareholder_ref, category, description, received_on, sla_due, assigned_to, resolution, status)
+stewardship_engagements (id, party_id, topic[esg/pay/governance/strategy], date, summary, outcome, proxy_advisor_ref)
+board_meetings (id, body[board/audit_committee/risk_committee/nomination/other], meeting_date, venue_or_link, agenda_doc_id, pack_due_date, quorum_met, minutes_doc_id, status)
+board_packs (id, meeting_id, pack_type[financial_results/audit_findings/general], snapshot_at, status[draft/in_review/approved/published], version, approval_request_id, published_at, document_id)
+results_pack_data (id, pack_id, period, metrics_json, vs_budget_json, vs_prior_json, segment_json, cfo_commentary, locked_at)
+audit_committee_pack_items (id, pack_id, item_type[ia_finding/ea_observation/mgmt_response/overdue_action/ethics_summary], ref_type, ref_id, summary, rating)
+directors (id, person_ref, appointment_date, term_end, director_type[executive/non_exec/independent], independence_status, skills_json, status)
+director_committees (id, director_id, committee_body, role, from_date, to_date)
+director_coi_declarations (id, director_id, period, declared_json, reviewed_by, status)
+board_evaluations (id, cycle, evaluator, scores_json, findings, action_plan_json)
+board_resolutions (id, meeting_id, resolution_no, text, resolution_type[board/circular], result, signed_doc_id)
+board_actions (id, meeting_id, action, owner_id, due_date, status, carried_forward)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/ext/ir/lenders    GET/POST/PUT .../lenders/:id/facilities    GET/POST .../facilities/:fid/covenants    POST .../covenants/:cid/test
+GET /api/ext/ir/covenants/headroom    GET/POST/PUT /api/ext/ir/compliance-certs    POST .../compliance-certs/:id/submit
+GET/POST/PUT /api/ext/ir/ratings    GET/POST /api/ext/ir/amendments    GET /api/ext/ir/maturity-profile
+GET/POST/PUT /api/ext/ir/analysts    GET/POST .../analysts/:id/engagements    GET/POST /api/ext/ir/consensus
+GET/POST/PUT /api/ext/ir/earnings    GET/POST .../earnings/:id/materials    POST .../earnings/:id/disclosure-review    PUT .../earnings/:id/archive
+GET/POST /api/ext/ir/shareholders/snapshots    GET /api/ext/ir/shareholders/analytics    POST .../shareholders/import
+GET/POST/PUT /api/ext/ir/comm-plans    POST .../comm-plans/:id/send
+GET/POST/PUT /api/ext/ir/meetings    GET/POST .../meetings/:id/resolutions    POST .../meetings/:id/results
+GET/POST/PUT /api/ext/ir/corporate-actions    GET /api/ext/ir/unclaimed-dividends
+GET/POST/PUT /api/ext/ir/queries    GET/POST /api/ext/ir/stewardship
+GET/POST/PUT /api/ext/board/meetings    GET/POST/PUT .../packs    POST .../packs/:id/generate    POST .../packs/:id/submit    PUT .../packs/:id/publish
+GET/POST/PUT /api/ext/board/directors    GET/POST .../directors/:id/coi    GET/POST /api/ext/board/evaluations
+GET/POST /api/ext/board/resolutions    PUT .../resolutions/:id/vote    GET/POST/PUT /api/ext/board/actions
+```
+
+### Core Logic
+1. Covenant actual value Ledger/Treasury se auto-pull hoti hai (formula_json se). Headroom = (threshold - actual) / threshold. Headroom config % se kam ho to early-warning CFO/Treasurer ko, aur breach par turant escalation aur lender notification workflow.
+2. Compliance certificate ka preparer aur reviewer alag hote hain. Due date se pehle reminders, aur submission ka lender acknowledgement save hota hai.
+3. Maturity profile (debt maturity wall) facilities se auto-banta hai, aur maturity se pehle refinancing task (config months).
+4. Rating trigger (e.g. covenant breach par rating action) `credit_ratings.triggers_json` se monitor hota hai.
+5. Earnings event banne par `trading_windows` mein quiet period auto-add hota hai. Is dauran analyst/investor meeting log karne ya schedule karne par warning ya block (config).
+6. Earnings script, Q&A bank aur press release Disclosure Committee review se guzarte hain. Review ke bina "approved" nahi, aur approved version ka hash lock hota hai.
+7. Analyst/investor ko material info sirf public disclosure ke baad. Meeting notes mein "material info shared" flag aaye to Legal ko turant alert (selective disclosure check, country `disclosure_rules` se).
+8. Consensus vs guidance mein drift config % se zyada ho to IR + CFO ko alert.
+9. Shareholder snapshots source file import se aate hain, aur change from previous snapshot se buyers/sellers dikhte hain.
+10. AGM/EGM: notice period (country config) se pehle notice na gaya to red flag. Resolutions ka result record date ke holdings se match hota hai, aur voting results exchange filing task trigger karte hain.
+11. Corporate action announce hone par record date, payment date aur filing tasks auto-bante hain. Unclaimed dividend transfer deadline se pehle reminder.
+12. Shareholder query ka SLA hota hai (category wise), overdue par escalation, aur regulator-visible grievance report auto-banti hai (country config).
+13. Board pack generate hote waqt data ka snapshot lock ho jata hai. Financial results Ledger se pull hoti hain aur CFO commentary ke bina publish nahi. Publish se pehle CFO approval.
+14. Audit committee pack ke items Internal Audit (GRC 11.0 Module 3) aur External Audit observations se auto-aate hain, naye duplicate entry ke bina. Overdue findings alag highlight.
+15. Independent director ki independence status criteria (Module 3 governance policy) se re-check hoti hai, aur term/independence limit cross hone par alert.
+16. Circular resolution ke liye sab directors ki e-signature chahiye, aur quorum/majority rules config se.
+17. Board actions agle meeting ke pack mein auto carry-forward hote hain jab tak close na hon.
+18. `audit_log` har action pe.
+
+---
+
+# MODULE 2: Government, Industry & Lobbying Relations (12.2)
+
+## FRONTEND: Screen 2: Government & Industry Relations (4 tabs)
+
+**Tab 1. Government Relations** (12.2.1.1 – 12.2.1.6)
+- Stakeholder map: ministries, regulators, legislators, local authorities, officials, influence/interest grid, relationship status
+- **Assess relationships** (12.2.1.1): health score (frequency of contact, quality, issues pending, sentiment), strengths/gaps, assessment cycle
+- **Responsible executives** (12.2.1.2): relationship owner + backup per body, appointment letter, effective-dated, authorized-spokesperson link
+- **Monitor relationships** (12.2.1.3): dashboard of health trend, overdue touchpoints, open issues, commitments, risk alerts
+- **Internal advisors input** (12.2.1.4): request/response board (Legal, Finance, Tax, Operations, HR, Sustainability), advice, SLA, consolidated position
+- **External advisors input** (12.2.1.5): consultants/law firms/lobbyists, engagement, advice log, deliverables, fees, conflict check
+- **Liaise with authorities** (12.2.1.6): correspondence tracker (letters, applications, permits, consultations, meetings, submissions), deadlines, owner, response status
+- (NEW) Policy and bill tracker: relevant legislation, consultation, stage, impact rating, company position
+- (NEW) Government-official interaction guardrail: gift/hospitality/travel pre-approval (anti-bribery) integration
+- (NEW) Issue management register: issue, stakeholders, risk, strategy, status
+
+**Tab 2. Quasi-Government Bodies** (12.2.2.1 – 12.2.2.4)
+- Agency register: tax/customs authorities, standard bodies, exchanges, SROs, public-sector bodies, development agencies, accreditation bodies; relationship basis (MoU, accreditation, membership)
+- **Establish relationships** (12.2.2.1): onboarding plan, agreements/MoUs, contacts, protocols
+- **Respond to audit inquiries** (12.2.2.2): inquiry intake, scope, document request list, response owner, deadline, privilege review, draft response, approval, submission, follow-ups
+- **Maintain documentation of contacts** (12.2.2.3): auto-compiled contact log (from interaction log), search, export per agency
+- **Plan and manage meetings** (12.2.2.4): agenda, attendees, briefing note, minutes, actions
+- (NEW) Inquiry SLA tracker, and cross-reference with related regulator inspections (GRC 11.0 Module 4)
+- (NEW) Information-consistency check (alag-alag agencies ko diye gaye jawab mein contradiction flag)
+
+**Tab 3. Trade & Industry Groups** (12.2.3.1 – 12.2.3.3)
+- Membership register: association, type, member since, annual dues, committee seats, benefits, owner
+- **Evaluate requirements** (12.2.3.1): strategic need scorecard (policy influence, networking, standards, market access, cost), alternatives
+- **Monitor success** (12.2.3.2): KPIs (meetings attended, positions influenced, wins, ROI, cost per benefit), annual review
+- **Extend or change** (12.2.3.3): decision (renew/upgrade/downgrade/exit/join new), notice dates, approval, handover
+- (NEW) Association-position alignment check (association ki public stance company policy se match karti hai ya nahi)
+- (NEW) Dues split (lobbying portion vs other, for disclosure and tax)
+- (NEW) Seat and delegate management
+
+**Tab 4. Lobbying Activities** (12.2.4)
+- Lobbying activity register: issue/bill, target body, position, lobbyist (in-house/external), meetings, communications, spend
+- Registrations and filings: lobbyist registrations, periodic reports (US LDA quarterly LD-2 / semiannual LD-203, EU Transparency Register, state/local, other countries via config)
+- (NEW) Time tracking (lobbying vs non-lobbying), covered-official contact log
+- (NEW) Political contributions and PAC register: pre-clearance, limits, contribution-to-filing reconciliation
+- (NEW) Gift/travel/ethics compliance for covered officials
+- (NEW) FARA/foreign-agent check, grassroots campaign tracker
+- (NEW) Lobbying spend dashboard (direct + indirect via associations), board oversight report
+- (NEW) Policy-alignment review: lobbying positions company ke ESG/public commitments se match karte hain ya nahi
+
+### BACKEND: Tables
+```
+gov_bodies (id, party_id, body_type[ministry/regulator/legislature/local_authority/other], jurisdiction, level[national/state/local/supranational], status)
+gov_stakeholder_map (id, body_id, contact_id, influence_score, interest_score, stance[supportive/neutral/opposed], relationship_status, as_of_date)
+relationship_assessments (id, party_id, assessment_date, health_score, factors_json, strengths, gaps, assessed_by, next_assessment_date)
+relationship_owners (id, party_id, owner_id, backup_owner_id, appointed_on, appointment_doc_id, effective_from, effective_to)
+advisor_requests (id, party_id, topic, requested_from_type[internal/external], advisor_dept_or_party_id, requested_by, due_date, response, status)
+external_advisor_engagements (id, advisor_party_id, scope, start_date, end_date, fee, currency, conflict_checked, status)
+gov_correspondence (id, party_id, direction[inbound/outbound], corr_type[letter/application/permit/consultation/submission/other], subject, ref_no, received_or_sent_on, due_date, owner_id, status, document_id)
+policy_tracker (id, jurisdiction, title, item_type[bill/regulation/consultation/policy], stage, impact_rating, company_position, effective_date, owner_id, status)
+issue_register (id, title, description, stakeholders_json, risk_rating, strategy, owner_id, status, opened_on, closed_on)
+quasi_govt_agencies (id, party_id, agency_type[tax/customs/standards/exchange/sro/public_sector/accreditation/other], relationship_basis, mou_doc_id, status)
+agency_onboarding_plans (id, agency_id, steps_json, owner_id, status, completed_on)
+audit_inquiries (id, agency_id, inquiry_no, received_on, scope, due_date, owner_id, privilege_review_done, status[received/gathering/review/submitted/follow_up/closed], regulator_inspection_ref, remediation_case_id)
+inquiry_document_requests (id, inquiry_id, request_text, assignee_id, due_date, response_doc_id, status)
+inquiry_responses (id, inquiry_id, draft_version, approver_id, approval_request_id, submitted_on, document_id)
+contact_documentation_exports (id, party_id, period, exported_by, exported_on, document_id)
+meetings_external (id, party_id, meeting_date, venue, agenda_doc_id, briefing_doc_id, attendees_json, minutes_doc_id, actions_json, interaction_id)
+industry_groups (id, party_id, group_type[trade_association/standards_body/chamber/coalition/other], member_since, annual_dues, currency, lobbying_pct, owner_id, status)
+industry_group_seats (id, group_id, committee_name, delegate_id, from_date, to_date)
+group_requirement_evaluations (id, group_id, criteria_scores_json, total_score, alternatives_json, evaluated_on, evaluated_by)
+group_kpis (id, group_id, period, meetings_attended, positions_influenced, wins, cost, benefit_est, roi, notes)
+group_decisions (id, group_id, decision[renew/upgrade/downgrade/exit/join], notice_date, effective_date, approval_request_id, rationale)
+group_position_alignment (id, group_id, topic, group_position, company_position, aligned, reviewed_on, action)
+lobbying_activities (id, issue_title, bill_ref, target_body_id, position, lobbyist_type[in_house/external], lobbyist_party_or_user_id, start_date, end_date, spend_amount, currency, status)
+lobbying_contacts (id, activity_id, official_contact_id, contact_date, channel, summary, covered_official, interaction_id)
+lobbying_time_entries (id, user_id, activity_id, date, hours, is_lobbying, notes)
+lobbying_registrations (id, jurisdiction, regime[us_lda/eu_tr/state/local/other], registrant, registration_no, effective_from, expiry, status)
+lobbying_filings (id, registration_id, period, form_type[ld1/ld2/ld203/tr_update/other], due_date, preparer_id, reviewer_id, filed_on, ack_ref, status, document_id)
+political_contributions (id, contributor_type[company/pac/executive], contributor_id, recipient, amount, currency, date, preclearance_request_id, filing_ref, status)
+foreign_agent_checks (id, activity_id, check_date, result, notes, reviewed_by)
+grassroots_campaigns (id, issue_title, start_date, end_date, reach, spend, status)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/ext/gov/bodies    GET/POST/PUT .../bodies/:id/stakeholders    GET /api/ext/gov/stakeholder-map
+GET/POST /api/ext/gov/assessments    GET /api/ext/gov/relationship-health    GET/POST/PUT /api/ext/gov/owners
+GET/POST/PUT /api/ext/gov/advisor-requests    GET/POST/PUT /api/ext/gov/external-advisors
+GET/POST/PUT /api/ext/gov/correspondence    GET/POST/PUT /api/ext/gov/policy-tracker    GET/POST/PUT /api/ext/gov/issues
+GET/POST/PUT /api/ext/agencies    POST .../agencies/:id/onboarding
+GET/POST/PUT /api/ext/agencies/inquiries    GET/POST .../inquiries/:id/requests    POST .../inquiries/:id/response    PUT .../inquiries/:id/submit
+GET /api/ext/agencies/:id/contact-log    POST .../agencies/:id/contact-log/export
+GET/POST/PUT /api/ext/agencies/meetings
+GET/POST/PUT /api/ext/industry/groups    GET/POST .../groups/:id/seats    POST .../groups/:id/evaluate    GET/POST .../groups/:id/kpis
+POST /api/ext/industry/groups/:id/decision    GET/POST /api/ext/industry/alignment
+GET/POST/PUT /api/ext/lobbying/activities    GET/POST .../activities/:id/contacts    GET/POST /api/ext/lobbying/time-entries
+GET/POST/PUT /api/ext/lobbying/registrations    GET/POST/PUT /api/ext/lobbying/filings    POST .../filings/:id/submit
+GET/POST/PUT /api/ext/lobbying/contributions    POST .../contributions/:id/preclear
+POST /api/ext/lobbying/foreign-agent-check    GET/POST/PUT /api/ext/lobbying/grassroots
+GET /api/ext/lobbying/spend-dashboard    GET /api/ext/lobbying/alignment-review
+```
+
+### Core Logic
+1. Relationship health score = weighted (contact recency, interaction quality, open-issue ageing, commitments kept, sentiment). Weights config se. Score threshold se neeche aaye to owner ko alert.
+2. Har govt body/agency ka ek hi `relationship_owner` + backup hota hai (effective-dated). Owner ke bina body "unassigned" flag, aur owner company chhode to turant reassign task.
+3. Sirf `authorized_spokespersons` hi govt/agency ke saath formal meeting ya submission log kar sakte hain.
+4. Internal advisor request ka SLA hota hai. Overdue par owner ko escalation, aur saare internal inputs ek consolidated position note mein jaate hain jo approve hone par "company position" bante hain.
+5. External advisor engagement se pehle conflict check, aur advisor ke fee/deliverable `legal`/procurement ke through approve.
+6. Correspondence due date se pehle reminder, aur regulator/authority ke statutory deadlines (country config) red flag ke saath track hote hain.
+7. Govt official ke saath gift/hospitality/travel/donation ki request approval ke bina nahi. Limit exceed ya high-risk country par Compliance + Legal approval, aur sab GRC 11.0 `gifts_hospitality` mein sync.
+8. Audit inquiry intake par SLA timer shuru. Har document request ka owner aur deadline hota hai, privilege review (Legal) ke bina response submit nahi, aur approval ke baad hi external bhejna.
+9. Same topic par alag-alag agencies ko diye gaye responses ka consistency check chalta hai (key facts/figures compare), aur mismatch par Legal ko flag.
+10. Inquiry se agar findings/penalty aaye to GRC 11.0 Module 5 mein remediation case auto-ban sakta hai.
+11. Contact documentation: `stakeholder_interactions` se auto-compile hoti hai, aur export agency ya time-period wise mil sakta hai (read-only, `audit_log` ke saath).
+12. Industry group membership ka evaluation scorecard config criteria se, aur renewal se 90 din pehle (config) review task, notice date miss na ho isliye alert.
+13. Association ki public position company position se mismatch ho to alert aur Government Relations head ko review task (alignment).
+14. Dues ka lobbying % auto-lobbying spend mein add hota hai (indirect lobbying) taaki disclosure complete ho.
+15. Lobbying: `lobbying_time_entries` mein is_lobbying flag se hi spend aur reportable hours calc hote hain. Registration threshold (e.g. US LDA per-quarter limit, config) cross hone par "registration required" alert.
+16. Filings (LD-2/LD-203/EU TR) ke due date calendar se, preparer-reviewer alag, aur filing ke baad acknowledgement save. LD-203 ke contributions `political_contributions` se reconcile hote hain.
+17. Political contribution pre-clearance ke bina allowed nahi. Limit/blackout rules country config se, aur covered official ko gift/travel rules ke tahat check.
+18. Lobbying positions `policy-alignment review` mein company ke public commitments/ESG policies se compare hoti hain, mismatch par Board oversight report mein flag.
+19. Board ko quarterly lobbying spend (direct + indirect) report auto-generate hoti hai.
+20. `audit_log` har action pe, aur interactions ka history read-only.
+
+---
+
+# MODULE 3: Ethics, Governance & Compliance Program (12.4.1 – 12.4.4)
+
+## FRONTEND: Screen 3: Ethics, Governance & Compliance Program (4 tabs)
+
+**Tab 1. Ethics Policies** (12.4.1)
+- Policy library: code of ethics/conduct, anti-bribery, anti-corruption, conflict of interest, gifts, whistleblower/non-retaliation, human rights, supplier code of conduct, political activity policy
+- Draft → review → approve → publish, version diff, country variants, translations
+- (NEW) Ethics advisory (employees "kya yeh theek hai?" poochte hain), case-law style FAQ, anonymized dilemmas
+- (NEW) Acknowledgement + quiz, annual re-attestation (previous attestations module reuse)
+- (NEW) Ethics culture survey, and metrics (reports per 100 employees, substantiation rate, retaliation indicators)
+- (NEW) Third-party code (suppliers/agents ko code accept karwana)
+
+**Tab 2. Corporate Governance Policies** (12.4.2)
+- Governance policy set: board charter, committee terms of reference, delegation of authority (DoA), related-party transaction policy, insider trading policy, director independence criteria, disclosure policy, subsidiary governance, dividend policy
+- (NEW) Delegation of Authority matrix: who can approve what (amount, type, entity), effective-dated, approval engine se integrated
+- (NEW) Related-party transaction register: party, nature, value, approval (audit committee), arm's-length evidence, disclosure
+- (NEW) Governance code mapping (local listing rules/corporate governance code) compliance matrix, comply-or-explain
+- (NEW) Legal entity register and statutory registers (directors, shareholders, charges, minutes), subsidiary compliance calendar, signatory/authority records
+- (NEW) Insider trading controls: designated persons, trading window, pre-clearance of trades, holdings declaration
+
+**Tab 3. Preventive Law Programs** (12.4.3)
+- Programs catalogue: contract training, legal health checks, regulatory briefings, privilege awareness, records retention training, IP awareness, competition law (antitrust) training, data privacy basics
+- Program plan: audience, frequency, owner, budget, effectiveness measures
+- (NEW) Legal risk assessment by business area (heatmap, linked to GRC risk register)
+- (NEW) Legal health check/audit: checklist, findings, action plan (e.g. contract hygiene, IP registration gaps, licensing compliance)
+- (NEW) Playbooks and templates self-service (NDA, vendor, sales terms) with fallback positions
+- (NEW) Legal alerts/briefings distribution (new laws, cases) by audience, aur read tracking
+- (NEW) Effectiveness analytics: dispute trends before/after program, training completion, and quiz score
+
+**Tab 4. Compliance Program: Plan & Execute** (12.4.4.1, 12.4.4.2)
+- Plan and initiate (12.4.4.1): program charter, scope/topics (anti-bribery, antitrust, sanctions, privacy, trade, ESG), risk-based annual plan, roles, budget, KPIs, resources, approval
+- Execute (12.4.4.2): initiatives tracker (training, monitoring, testing, investigations, communications, third-party due diligence), status, owners, evidence, corrective actions
+- (NEW) Program effectiveness evaluation (design, resourcing, testing, continuous improvement) with maturity score, self-assessment questionnaire
+- (NEW) Investigation management (case intake from helpline/speak-up, triage, investigator, findings, discipline, closure), integrated with GRC 11.0 Module 3
+- (NEW) Third-party due diligence tracker (agents, distributors, high-risk vendors), risk tier, DD status, red flags
+- (NEW) Sanctions/export-control screening log
+- (NEW) Compliance dashboard for senior management/board, and annual program report
+
+### BACKEND: Tables
+```
+ethics_policies (id, name, policy_type[code_of_conduct/anti_bribery/coi/gifts/whistleblower/human_rights/supplier_code/political/other], owner_id, country_id, review_due_date, status)
+ethics_policy_versions (id, policy_id, version_no, content, change_summary, effective_from, effective_to, approved_by, document_id)
+ethics_queries (id, asker_ref, category, question, answer, answered_by, is_anonymous, publish_as_faq, status)
+ethics_metrics (id, period, reports_per_100, substantiation_rate, retaliation_flags, culture_score, snapshot_at)
+third_party_code_acceptance (id, third_party_id, policy_version_id, accepted_on, document_id)
+governance_policies (id, name, policy_type[board_charter/committee_tor/doa/rpt/insider_trading/independence/disclosure/subsidiary/dividend/other], owner_id, version, effective_from, status)
+delegation_of_authority (id, entity_id, authority_area, role_or_position, limit_amount, currency, conditions_json, approver_chain_json, effective_from, effective_to)
+related_party_transactions (id, rp_name, relationship, nature, value, currency, proposed_on, arms_length_evidence_id, approval_request_id, decision, disclosed_on, status)
+governance_code_map (id, code_name, requirement_ref, internal_policy_id, compliance_status[comply/partial/explain], explanation, reviewed_on)
+legal_entity_registers (id, entity_id, register_type[directors/shareholders/charges/minutes/signatories], data_json, as_of_date)
+subsidiary_compliance_calendar (id, entity_id, item, due_date, owner_id, status, evidence_id)
+designated_persons (id, person_ref, designation_reason, added_on, removed_on)
+trade_preclearances (id, designated_person_id, security, qty, requested_on, window_check_ok, approval_request_id, decision, executed_on)
+holdings_declarations (id, designated_person_id, period, holdings_json, declared_on)
+preventive_programs (id, program_type[contract/health_check/briefing/privilege/retention/ip/antitrust/privacy/other], name, audience_rule_json, frequency, owner_id, budget, currency, effectiveness_kpis_json, status)
+preventive_program_sessions (id, program_id, session_date, delivered_by, attendees_count, completion_pct, avg_quiz_score, material_doc_id)
+legal_risk_assessments (id, business_area, assessed_on, risk_json, heat_rating, linked_risk_id, owner_id)
+legal_health_checks (id, area, checklist_json, findings_json, action_plan_json, completed_on, owner_id, status)
+legal_playbooks (id, name, doc_type[nda/vendor/sales/other], standard_clauses_json, fallback_json, version, status)
+legal_alerts (id, title, summary, source, audience_json, published_on, read_count)
+compliance_program_plans (id, fiscal_year, charter_doc_id, scope_json, risk_based_priorities_json, budget, currency, kpis_json, approval_request_id, status)
+compliance_initiatives (id, plan_id, initiative_type[training/monitoring/testing/investigation/communication/due_diligence/other], title, owner_id, due_date, status, evidence_id, corrective_action_id)
+compliance_effectiveness_reviews (id, plan_id, review_date, dimension_scores_json, maturity_score, findings_json, action_plan_json)
+investigations (id, case_no, source_type[helpline/speakup/audit/manager/regulator], source_id, category, severity, investigator_id, status, findings, disciplinary_action, closed_on, is_confidential, legal_matter_id, remediation_case_id)
+tp_due_diligence (id, third_party_id, risk_tier, dd_type, status, red_flags_json, approved_by, valid_until, last_screened_on)
+sanctions_screenings (id, subject_type, subject_id, screened_on, lists_checked_json, result[clear/potential_match/match], reviewed_by, decision)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/ext/ethics/policies    POST .../policies/:id/submit    PUT .../policies/:id/publish    GET .../versions/diff?a=X&b=Y
+GET/POST /api/ext/ethics/queries    PUT .../queries/:id/answer    GET /api/ext/ethics/metrics    GET/POST /api/ext/ethics/third-party-acceptance
+GET/POST/PUT /api/ext/governance/policies    GET/POST/PUT /api/ext/governance/doa    GET /api/ext/governance/doa/check?type=X&amount=Y
+GET/POST/PUT /api/ext/governance/rpt    PUT .../rpt/:id/decision    GET/PUT /api/ext/governance/code-map
+GET/POST /api/ext/governance/registers    GET/POST/PUT /api/ext/governance/subsidiary-calendar
+GET/POST /api/ext/governance/designated-persons    POST .../trade-preclearance    GET .../holdings
+GET/POST/PUT /api/ext/preventive/programs    GET/POST .../programs/:id/sessions    GET/POST /api/ext/preventive/risk-assessments
+GET/POST/PUT /api/ext/preventive/health-checks    GET/POST/PUT /api/ext/preventive/playbooks    GET/POST /api/ext/preventive/alerts    GET /api/ext/preventive/effectiveness
+GET/POST/PUT /api/ext/compliance-program/plans    POST .../plans/:id/submit    GET/POST/PUT .../plans/:id/initiatives
+GET/POST /api/ext/compliance-program/effectiveness    GET/POST/PUT /api/ext/investigations    PUT .../investigations/:id/close
+GET/POST/PUT /api/ext/compliance-program/due-diligence    POST /api/ext/compliance-program/sanctions-screen    GET /api/ext/compliance-program/dashboard
+```
+
+### Core Logic
+1. Ethics policy publish ke baad immutable hai, edit par naya version. Publish par audience (employees, directors, contractors, third parties) ko acknowledgement request, aur quiz fail par attest complete nahi.
+2. Ethics query ka jawab "FAQ" ban sakta hai (anonymized) aur HR/Legal approve karne ke baad hi publish hota hai.
+3. DoA matrix effective-dated hai, aur Approval Engine har approval chain DoA se nikalta hai (amount/type/entity). DoA mein koi gap/overlap ho to validation warning.
+4. Related-party transaction audit committee approval ke bina process nahi hota. Arm's-length evidence ke bina approval nahi, aur disclosure deadline (country config) track hoti hai.
+5. Governance code map se comply/explain status nikalta hai. "Explain" wale items ka explanation board approve karta hai aur annual report ke liye export hota hai.
+6. Statutory registers (directors, shareholders, charges) ka as-of-date view, aur change hone par auto-update task aur regulatory filing (country config) trigger.
+7. Insider trading: designated person ka trade pre-clearance tabhi jab `trading_windows` open ho aur person `insider_list` mein na ho (ya approval ke saath). Executed trade aur holdings declaration reconcile hote hain.
+8. Preventive program ka audience rule se enrolled log nikalte hain, completion aur quiz score track hota hai. Overdue par manager escalation.
+9. Legal risk assessment ka heat rating GRC 11.0 risk register se link hota hai (high rating par risk auto-suggest).
+10. Playbook fallback positions contract drafting (Module 4 Tab 5) mein use hote hain, taaki business bina Legal ke standard cases close kare.
+11. Effectiveness analytics mein programs ke pehle/baad ke dispute/claim trends compare hote hain, aur low-effectiveness programs par review.
+12. Compliance program plan risk-based hoti hai. GRC 11.0 ke risk register aur obligations se priority topics suggest hote hain. Plan approve hone ke baad hi initiatives active.
+13. Initiative close karne ke liye evidence zaruri hai (training completion, test result, etc.), aur corrective actions `grc_actions` mein sync.
+14. Program effectiveness review annual hota hai (design, resourcing, testing, continuous improvement), aur gaps ka action plan.
+15. Investigation case confidential hai. Sirf assigned investigator, Legal aur HR (as needed) ko dikhta hai. Retaliation monitoring: reporter ke baad ke HR actions (performance rating, transfer, termination) par flag.
+16. Third-party DD high-risk tier (country, industry, govt-interaction) par enhanced DD, aur DD ke bina contract/payment block (Procurement integration, config).
+17. Sanctions screening party onboarding, payment aur periodic re-screen par chalti hai. "Potential match" par payment hold aur Compliance review.
+18. `audit_log` har action pe.
+
+---
+
+# MODULE 4: Legal Operations: Counsel, Disputes, Advice & Contracts (12.4.5, 12.4.7, 12.4.8, 12.4.9)
+
+## FRONTEND: Screen 4: Legal Operations (5 tabs)
+
+**Tab 1. Outside Counsel: Assess, Engage & Manage** (12.4.5.1 – 12.4.5.4)
+- Legal intake: request portal, triage (in-house / outside counsel / business), urgency, jurisdiction, matter creation
+- **Assess problem and work requirements** (12.4.5.1): problem statement, scope, expertise needed, jurisdiction, risk/exposure, timeline, "in-house vs outside" decision note
+- **Engage/retain** (12.4.5.2): panel selection or RFP, conflict check, rate card approval, engagement letter, billing guidelines acceptance
+- **Receive strategy/budget** (12.4.5.3): case strategy, phase-wise budget (UTBMS phases), assumptions, approval, reserve setting
+- **Receive work product and manage/monitor** (12.4.5.4): deliverables, status reports, milestones, deadlines, reserves, work-product repository, privilege tagging
+- (NEW) Preferred counsel panel and rate cards, alternative fee arrangements (fixed fee, capped, success fee)
+- (NEW) Budget-vs-actual early warning, change-of-scope request (re-approval)
+- (NEW) Matter workspace: documents, tasks, notes, contacts, calendar, and linked contract/dispute
+
+**Tab 2. Legal Spend: Payment & Performance** (12.4.5.5, 12.4.5.6)
+- **Process payment for legal services** (12.4.5.5): e-invoice intake (LEDES/PDF), auto-audit against guidelines, line-item adjustments, approver workflow, AP posting, payment status, accrual/WIP
+- **Track legal activity/performance** (12.4.5.6): firm scorecards (cost, outcome, timeliness, responsiveness, diversity), matter KPIs, spend analytics by firm/practice/matter/entity
+- (NEW) Invoice rule engine: rate cap, block billing, duplicate entries, unauthorized timekeepers, expenses policy, UTBMS code validation
+- (NEW) Tax/withholding handling, multi-currency, FX-gain/loss
+- (NEW) Accruals and reserves reconciliation with Finance (monthly)
+- (NEW) Panel review cycle (annual), rate increase negotiation tracker, savings tracking
+- (NEW) Benchmark compare (market rate vs actual)
+
+**Tab 3. Disputes & Litigation** (12.4.7)
+- Dispute/claim register: type (litigation, arbitration, regulatory proceeding, employment, IP, commercial), forum, parties, claim amount, status, counsel, key dates
+- Case workspace: pleadings, evidence, hearings calendar, orders, strategy, risk assessment, settlement authority, ADR/mediation
+- (NEW) Exposure and provisioning: probable/possible/remote, estimated range, reserve, disclosure note (Finance link)
+- (NEW) Legal hold: issue, custodians, acknowledgements, release; e-discovery export link
+- (NEW) Settlement workflow: offer, authority matrix (DoA), approval, agreement, payment, closure
+- (NEW) Insurance notice and coverage tracking (insurers ko notice dena aur reimbursements)
+- (NEW) Court/hearing deadline calculator (jurisdiction rules config), aur limitation period tracker
+- (NEW) Lessons-learned and trend analytics (case type, outcome, cost, duration), root cause link to GRC
+
+**Tab 4. Legal Advice & Counselling** (12.4.8)
+- Advice requests: requester, topic, urgency, jurisdiction, assigned lawyer, SLA, advice delivered, privilege flag
+- Advice repository: opinions, memos, FAQs, precedents, knowledge base (privileged-aware, searchable)
+- (NEW) Intake forms by topic (marketing claims, new product, HR actions, M&A, privacy) with routing to right specialist
+- (NEW) SLA, workload balancing and legal team capacity
+- (NEW) Advice re-use suggestions (similar earlier advice dikhana)
+- (NEW) Business self-service (playbooks, templates, FAQ bots) for low-risk questions
+- (NEW) Advice-to-policy feedback: repeated queries se policy/playbook update suggestion
+
+**Tab 5. Contracts: Negotiate & Document** (12.4.9)
+- Contract requests: intake form, template selection, counterparty, value, term, risk tier
+- Template/clause library: approved clauses, fallback positions, jurisdiction variants, language versions
+- Drafting and negotiation: drafts, redlines, version compare, comments, counterparty portal, negotiation log
+- Approvals and signature: approval chain (DoA), e-signature, execution copy
+- Repository: contracts searchable by party/type/date/clause, metadata, status (draft/negotiating/signed/active/expired/terminated)
+- (NEW) Obligation management: extracted obligations (payment, SLA, renewal, notice, deliverables), owner, reminder
+- (NEW) Renewal/expiry/auto-renew notice alerts, amendment/addendum tracking
+- (NEW) Risk-scoring (deviation from standard, liability caps, indemnities)
+- (NEW) AI-assist: clause extraction, redline suggestions, summary (human approve)
+- (NEW) Contract-to-matter, contract-to-vendor/customer, contract-to-spend linking, and contract-based compliance dashboard
+
+### BACKEND: Tables
+```
+legal_requests (id, request_no, requester_id, category, description, urgency, jurisdiction, triage_decision[in_house/outside_counsel/business/escalate], matter_id, received_on, status)
+legal_matter_ext (id, matter_id, matter_class[litigation/advisory/transaction/regulatory/ip/employment/other], jurisdiction, exposure_amount, currency, practice_area, business_unit_id, related_contract_id, status)
+work_requirement_briefs (id, matter_id, problem_statement, scope, expertise_needed, jurisdiction, risk_exposure, timeline, in_house_vs_outside_note, prepared_by, approved_by)
+counsel_panel (id, law_firm_party_id, practice_areas_json, jurisdictions_json, rate_card_id, panel_status[preferred/approved/restricted/exited], valid_from, valid_to)
+counsel_rate_cards (id, law_firm_party_id, role, rate, currency, effective_from, afa_json, approved_by)
+counsel_rfps (id, matter_id, firms_invited_json, due_date, evaluation_json, winner_party_id, status)
+counsel_conflict_checks (id, matter_id, law_firm_party_id, check_date, result, notes, cleared_by)
+counsel_engagements (id, matter_id, law_firm_party_id, lead_attorney, engagement_letter_doc_id, billing_guidelines_accepted_on, fee_arrangement[hourly/fixed/capped/success/mixed], start_date, end_date, status)
+matter_strategies (id, matter_id, version, strategy_summary, assumptions, risk_assessment, received_on, approved_by, document_id)
+matter_budgets (id, matter_id, version, phase_code, task_code, amount, currency, assumptions, approval_request_id, status)
+matter_reserves (id, matter_id, as_of_date, probability[probable/possible/remote], estimate_low, estimate_high, reserve_amount, currency, approved_by)
+matter_deliverables (id, matter_id, title, due_date, received_on, doc_id, privileged, reviewer_id, status)
+matter_status_reports (id, matter_id, report_date, summary, spend_to_date, forecast_to_complete, next_steps, doc_id)
+matter_scope_changes (id, matter_id, description, budget_delta, approval_request_id, status)
+legal_invoices (id, invoice_no, law_firm_party_id, matter_id, invoice_date, currency, total_amount, format[ledes/pdf/manual], received_on, audit_status[pending/auto_approved/adjusted/rejected], approval_request_id, ap_ref, paid_on, status)
+legal_invoice_lines (id, invoice_id, timekeeper, role, date, hours, rate, amount, utbms_phase, utbms_task, narrative, audit_flags_json, adjusted_amount, adjustment_reason)
+billing_guidelines (id, name, rules_json, effective_from, applies_to_json)
+legal_accruals (id, matter_id, period, wip_amount, accrued_amount, currency, posted_to_ledger_ref)
+counsel_scorecards (id, law_firm_party_id, period, cost_score, outcome_score, timeliness_score, responsiveness_score, diversity_score, overall, comments)
+panel_reviews (id, law_firm_party_id, review_date, decision, rate_negotiation_json, savings_amount, currency)
+disputes (id, matter_id, dispute_type[litigation/arbitration/regulatory/employment/ip/commercial], forum, case_no, claimant, respondent, claim_amount, currency, filed_on, status[open/stayed/settled/judgment/appeal/closed], outcome, closed_on)
+dispute_events (id, dispute_id, event_type[filing/hearing/order/deadline/settlement_offer/judgment], event_date, description, owner_id, document_id)
+dispute_deadlines (id, dispute_id, deadline_type, due_date, rule_ref, computed_by, owner_id, status)
+limitation_trackers (id, claim_ref, jurisdiction, start_date, limitation_end_date, status)
+legal_holds (id, matter_id, scope_json, issued_on, released_on, status)   -- reuse from GRC remediation structure
+legal_hold_acks (id, hold_id, custodian_id, sent_at, acknowledged_at)
+settlements (id, dispute_id, offer_amount, currency, authority_required, approval_request_id, agreed_on, payment_ref, status)
+dispute_insurance_notices (id, dispute_id, insurance_policy_id, notified_on, coverage_decision, reimbursed_amount)
+advice_requests (id, request_no, requester_id, topic, urgency, jurisdiction, assigned_to, sla_due, advice_given_on, is_privileged, status)
+advice_documents (id, advice_request_id, doc_type[opinion/memo/faq/precedent], title, document_id, privileged, tags_json, is_published_to_kb)
+advice_intake_forms (id, topic, fields_json, routing_rule_json, status)
+legal_faq_kb (id, question, answer, topic, audience_json, status, view_count)
+contracts (id, contract_no, title, contract_type, counterparty_party_id, our_entity_id, value, currency, start_date, end_date, auto_renew, notice_period_days, risk_tier, owner_id, status[draft/negotiating/approval/signed/active/expired/terminated], parent_contract_id, matter_id)
+contract_requests (id, requester_id, template_id, counterparty, value, term, risk_tier, request_no, status, contract_id)
+contract_templates (id, name, contract_type, jurisdiction, language_code, content_doc_id, version, status)
+clause_library (id, clause_name, category, standard_text, fallback_json, risk_level, jurisdiction, version, status)
+contract_versions (id, contract_id, version_no, doc_id, change_summary, redline_doc_id, created_by, created_at)
+contract_negotiation_log (id, contract_id, round_no, issue, our_position, counterparty_position, resolved, resolved_on)
+contract_approvals (id, contract_id, approval_request_id, doa_check_ok, decision, decided_on)
+contract_signatures (id, contract_id, signer_ref, signed_on, esign_ref, certificate_doc_id)
+contract_obligations (id, contract_id, obligation_type[payment/sla/renewal/notice/deliverable/other], description, due_date, owner_id, recurrence_json, status, source[manual/ai_extracted])
+contract_risk_scores (id, contract_id, score, deviations_json, assessed_on)
+contract_links (id, contract_id, link_type[matter/vendor/customer/spend/ip_license], link_ref_id)
+```
+
+### BACKEND: APIs
+```
+POST /api/ext/legal/requests    PUT .../requests/:id/triage    GET /api/ext/legal/requests
+GET/POST/PUT /api/ext/legal/matters    GET/POST/PUT .../matters/:id/brief    GET/POST .../matters/:id/documents
+GET/POST/PUT /api/ext/legal/panel    GET/POST/PUT .../rate-cards    POST .../rfps    GET .../rfps/:id/evaluate    POST .../conflict-checks
+POST /api/ext/legal/matters/:id/engage    GET/POST .../matters/:id/strategy    GET/POST/PUT .../matters/:id/budget    POST .../budget/:bid/submit
+GET/POST/PUT .../matters/:id/reserves    GET/POST .../matters/:id/deliverables    GET/POST .../matters/:id/status-reports    POST .../matters/:id/scope-change
+POST /api/ext/legal/invoices    POST .../invoices/ledes-upload    POST .../invoices/:id/audit    PUT .../invoices/:id/approve    POST .../invoices/:id/post-ap
+GET/PUT /api/ext/legal/billing-guidelines    GET/POST /api/ext/legal/accruals    GET/POST /api/ext/legal/scorecards    GET /api/ext/legal/spend-analytics
+GET/POST/PUT /api/ext/legal/panel-reviews
+GET/POST/PUT /api/ext/legal/disputes    GET/POST .../disputes/:id/events    GET .../disputes/:id/deadlines    POST .../disputes/:id/deadlines/compute
+POST /api/ext/legal/holds    PUT .../holds/:id/release    GET .../holds/:id/acks
+GET/POST/PUT /api/ext/legal/settlements    PUT .../settlements/:id/approve    POST .../disputes/:id/insurance-notice
+GET /api/ext/legal/disputes/analytics    GET/POST /api/ext/legal/limitation
+POST /api/ext/legal/advice-requests    PUT .../advice-requests/:id/assign    PUT .../advice-requests/:id/deliver    GET .../advice-requests/similar
+GET/POST /api/ext/legal/advice-docs    GET/POST/PUT /api/ext/legal/advice-forms    GET/POST/PUT /api/ext/legal/kb    GET /api/ext/legal/advice-workload
+POST /api/ext/contracts/requests    GET/POST/PUT /api/ext/contracts    GET/POST /api/ext/contracts/:id/versions    GET .../versions/compare?a=X&b=Y
+GET/POST/PUT /api/ext/contracts/templates    GET/POST/PUT /api/ext/contracts/clauses
+POST /api/ext/contracts/:id/submit-approval    POST .../contracts/:id/sign    GET /api/ext/contracts/search?q=X
+GET/POST/PUT /api/ext/contracts/:id/obligations    POST .../contracts/:id/extract (AI draft)    GET /api/ext/contracts/renewals?within=90    GET /api/ext/contracts/:id/risk
+```
+
+### Core Logic
+1. **Intake triage:** Legal request aane par category/urgency/jurisdiction se routing rule chalta hai. "Outside counsel" decide hone par matter ban jata hai aur `work_requirement_brief` zaruri hota hai (scope, expertise, jurisdiction, exposure, timeline).
+2. Outside counsel ka engagement tabhi jab conflict check clear ho, rate card approved ho, engagement letter attach ho aur firm ne billing guidelines accept ki ho. Panel se bahar ki firm ke liye exception approval.
+3. Strategy aur budget (phase/task wise, UTBMS) approve hone ke baad hi matter "active". Budget exceed hone ka forecast (spend + forecast to complete) config % se zyada ho to Legal head ko alert, aur scope change request re-approval ke saath.
+4. Work product `matter_deliverables` mein privilege tag ke saath aata hai. Status report cadence (config) miss hone par counsel ko reminder, aur milestone ageing escalation.
+5. Reserves/provisioning: `probable/possible/remote` assessment se reserve amount tay hota hai, Finance ko monthly accrual file jati hai (accounting-standard rules config se), aur reserve change par CFO/GC approval.
+6. **Invoice processing:** LEDES upload par lines parse hote hain, aur rule engine chalta hai (rate cap, block billing, duplicate lines, unauthorized timekeeper, UTBMS code validity, expense policy). Flagged lines auto-adjust ya reviewer ko jate hain, aur adjustment reason counsel ko wapas bheji jati hai.
+7. Invoice approval DoA aur matter budget se. Approved invoice AP mein post hota hai (tax/withholding, currency), aur payment status wapas sync. Budget se zyada invoice par approval level badhta hai.
+8. Accrual: monthly WIP/accrued legal fees `legal_accruals` se Ledger ko; reconciliation mein mismatch flag.
+9. **Performance:** Firm scorecard (cost vs budget, outcome, timeliness, responsiveness, diversity) har matter close par feedback se aur invoice data se auto-banta hai. Annual panel review mein low-score firm par action (rate renegotiation, restricted, exit).
+10. **Disputes:** Har dispute ek matter se linked hai. Court/hearing events se deadlines calculate hoti hain (jurisdiction rules config), aur limitation tracker claim ki expiry se pehle alert.
+11. Legal hold issue hone par custodians ko notice, acknowledgement tracking, pending par escalation, aur hold ke dauraan retention/delete block (common rule). Release sirf Legal head approval se.
+12. Settlement authority DoA matrix se; offer amount authority se upar ho to GC/CFO/Board approval. Settlement payment AP ke through aur reserve release auto-adjust.
+13. Dispute outcome/lessons learned se GRC 11.0 root cause aur preventive program (Module 3) mein improvement suggestion.
+14. Insurance: dispute claim par applicable policy ka notice window miss na ho (policy condition se due date), aur reimbursement tracking.
+15. **Advice:** Request intake form topic se routing (marketing, privacy, HR, M&A) ho kar sahi specialist ko. SLA breach par escalation, similar earlier advice dikhaya jata hai (privileged-aware), aur advice document default privileged.
+16. Repeated advice queries (config threshold) se playbook/policy/FAQ update ka suggestion Legal head ko jata hai.
+17. **Contracts:** Request template se draft; clause library ke approved clause se. Standard se deviation ka risk score auto-calc hota hai (liability cap, indemnity, termination, governing law), aur high-risk par Legal approval zaruri.
+18. Approval chain DoA se; signatory authority (Module 3 registers) check hota hai, aur e-signature ke baad executed copy repository mein lock hoti hai.
+19. Obligations (renewal, notice period, payment, SLA, deliverable) metadata aur AI-extraction se banti hain (human confirm), aur due date se pehle owner ko reminder. Auto-renew notice date miss na ho isliye notice-period se pehle alert.
+20. Contract ek matter, vendor/customer record, spend aur IP license (Module 5) se linked rehta hai.
+21. `audit_log` har action pe, aur privileged documents ka access log alag.
+
+---
+
+# MODULE 5: Intellectual Property Management (12.4.6)
+
+## FRONTEND: Screen 5: IP Management (4 tabs)
+
+**Tab 1. Copyrights, Patents & Trademarks** (12.4.6.1)
+- IP portfolio: patents, trademarks, copyrights, designs, domain names, trade secrets (register-only), with jurisdiction, family, status
+- Invention disclosure intake: inventor, description, novelty, committee review, file/not-file decision
+- Prosecution/registration: filings, office actions, responses, oppositions, grant/registration
+- Docket: deadlines, maintenance fees/annuities/renewals, payment status
+- (NEW) Patent family/priority tree, international filing routes (PCT/Madrid-type), country-wise deadlines
+- (NEW) Trademark classes, goods/services, use/non-use tracking, clearance search log
+- (NEW) Docket automation: rules per jurisdiction, auto-deadlines, reminders, escalations
+- (NEW) IP cost tracker (filing, prosecution, annuities) and budget
+- (NEW) Annuity/renewal decision workflow: pay, abandon, or review (value-based)
+
+**Tab 2. IP Rights & Restrictions** (12.4.6.2)
+- Ownership/chain of title: owner entity, assignments, inventor assignments, employee/contractor IP agreements
+- Rights and restrictions: encumbrances (liens, security interests), license-outs, covenants, field-of-use/territory limits
+- (NEW) Enforcement: infringement watch, evidence log, cease-and-desist, opposition/cancellation, takedown, litigation link (to Module 4)
+- (NEW) Freedom-to-operate and clearance log, and third-party IP risk
+- (NEW) Open-source compliance (OSS inventory, license obligations, scan results, remediation)
+- (NEW) Trade secret protection program (access controls checklist, NDAs, exit checklist)
+- (NEW) Inventor remuneration/reward tracking (jahan law/policy ho), inventor recognition
+
+**Tab 3. Licensing Terms Administration** (12.4.6.3)
+- License register: in-license/out-license, licensor/licensee, IP covered, field, territory, term, exclusivity, sublicense rights, royalty terms
+- Royalty administration: royalty rate tiers, minimum guarantees, reporting periods, statement intake, calculation, payment/receipt, audit rights
+- (NEW) Royalty statement validation and underpayment detection, audit tracker
+- (NEW) License compliance monitoring (usage limits, reporting, quality control)
+- (NEW) Renewal/expiry alerts, change-of-control/assignment consent tracking
+- (NEW) Revenue/cost dashboard (royalty income vs royalty expense)
+- (NEW) Link to contracts (Module 4 Tab 5), and Finance (AP/AR, tax withholding)
+
+**Tab 4. Options** (12.4.6.4)
+- Option register: options to acquire/license IP (or options granted to others), counterparty, IP, option fee, exercise window, exercise price/terms, conditions, status
+- Exercise decision workflow: evaluation, valuation, approval, exercise notice, closing
+- (NEW) Option expiry countdown aur auto-reminder, extension negotiation log
+- (NEW) Valuation worksheet (potential value, probability, cost to exercise, decision model)
+- (NEW) Conversion of option into license/assignment (link to Tab 3/Tab 2 records)
+- (NEW) Option-portfolio dashboard (open options, expiring in 90 days, total fees paid)
+
+### BACKEND: Tables
+```
+ip_assets (id, ip_no, ip_type[patent/trademark/copyright/design/domain/trade_secret], title, jurisdiction, owner_entity_id, family_id, status[idea/filed/pending/granted/registered/abandoned/expired/lapsed], filing_date, grant_date, expiry_date, business_unit_id, is_confidential)
+ip_families (id, family_name, priority_date, priority_country, family_type, parent_family_id)
+invention_disclosures (id, disclosure_no, title, description, inventors_json, novelty_notes, submitted_on, committee_decision[file/hold/reject/trade_secret], decided_on, ip_asset_id, status)
+ip_filings (id, ip_asset_id, filing_type[application/pct/madrid/response/opposition/other], office, application_no, filed_on, status, counsel_party_id, document_id)
+ip_office_actions (id, ip_asset_id, action_type, issued_on, due_date, response_filed_on, status, owner_id)
+ip_docket (id, ip_asset_id, deadline_type[renewal/annuity/response/maintenance/other], due_date, grace_end_date, rule_ref, status, owner_id, reminders_json)
+ip_annuities (id, ip_asset_id, year_no, fee_amount, currency, due_date, decision[pay/abandon/review], paid_on, payee_party_id, status)
+trademark_details (id, ip_asset_id, mark_text, mark_image_doc_id, nice_classes_json, goods_services, use_status, first_use_date, last_use_evidence_id)
+clearance_searches (id, subject, ip_type, jurisdiction, searched_on, result_json, risk_rating, searched_by)
+ip_chain_of_title (id, ip_asset_id, event_type[assignment/transfer/name_change/security_interest/release], from_party, to_party, event_date, recorded_on_register, document_id)
+ip_agreements (id, agreement_type[inventor_assignment/employee_ip/contractor_ip/nda], party_ref, ip_scope, signed_on, contract_id)
+ip_encumbrances (id, ip_asset_id, encumbrance_type[lien/security/covenant/restriction], holder_party_id, terms, start_date, end_date, status)
+ip_enforcement_cases (id, ip_asset_id, case_type[infringement/oppose/cancel/takedown/cease_desist], adverse_party, opened_on, evidence_json, status, legal_matter_id)
+fto_analyses (id, subject, jurisdiction, third_party_patents_json, risk_rating, conclusion, analysed_on, counsel_party_id)
+oss_inventory (id, component, version, license_type, product_ref, obligations_json, risk_rating, scan_date, status, remediation_action)
+trade_secret_register (id, name, description_restricted, owner_id, protection_measures_json, access_list_json, review_date, status)
+inventor_rewards (id, inventor_ref, ip_asset_id, reward_type, amount, currency, paid_on, policy_ref)
+ip_licenses (id, license_no, direction[in/out], counterparty_party_id, ip_scope_json, field_of_use, territory_json, exclusivity[exclusive/non_exclusive/sole], sublicense_allowed, term_start, term_end, auto_renew, royalty_terms_json, contract_id, status)
+license_royalty_tiers (id, license_id, tier_from, tier_to, rate_pct_or_fixed, basis, minimum_guarantee, currency)
+royalty_statements (id, license_id, period, reported_base, reported_royalty, calculated_royalty, variance, received_on, status[received/validated/disputed/paid], document_id)
+royalty_payments (id, license_id, statement_id, direction[pay/receive], amount, currency, due_date, paid_on, tax_withheld, ledger_ref)
+license_audits (id, license_id, audit_period, auditor_party_id, findings_json, recovered_amount, status)
+license_compliance_checks (id, license_id, check_date, area[usage/reporting/quality/other], result, notes)
+license_consents (id, license_id, consent_type[change_of_control/assignment/sublicense], requested_on, received_on, status)
+ip_options (id, option_no, direction[acquire/license_in/grant_out], counterparty_party_id, ip_scope_json, option_fee, currency, option_start, option_end, exercise_terms_json, conditions_json, status[open/exercised/lapsed/extended/terminated], contract_id)
+option_valuations (id, option_id, assessed_on, potential_value, probability_pct, exercise_cost, net_value, assumptions_json, assessed_by)
+option_exercises (id, option_id, decision[exercise/lapse/extend/negotiate], approval_request_id, exercise_notice_doc_id, exercised_on, resulting_license_id, resulting_asset_id)
+ip_costs (id, ip_asset_id, cost_type[filing/prosecution/annuity/enforcement/other], amount, currency, incurred_on, invoice_ref)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/ext/ip/assets    GET .../assets/:id    GET /api/ext/ip/families/tree
+POST /api/ext/ip/disclosures    PUT .../disclosures/:id/decision    GET/POST/PUT /api/ext/ip/filings    GET/POST /api/ext/ip/office-actions
+GET /api/ext/ip/docket?within=90    POST .../docket/recalculate    GET/POST/PUT /api/ext/ip/annuities    PUT .../annuities/:id/decision    POST .../annuities/pay
+GET/POST /api/ext/ip/trademarks/:id    GET/POST /api/ext/ip/clearance
+GET/POST/PUT /api/ext/ip/chain-of-title    GET/POST /api/ext/ip/agreements    GET/POST/PUT /api/ext/ip/encumbrances
+GET/POST/PUT /api/ext/ip/enforcement    GET/POST /api/ext/ip/fto    GET/POST /api/ext/ip/oss    POST .../oss/scan-import    GET/POST/PUT /api/ext/ip/trade-secrets    GET/POST /api/ext/ip/inventor-rewards
+GET/POST/PUT /api/ext/ip/licenses    GET/PUT .../licenses/:id/royalty-tiers    GET/POST .../licenses/:id/statements    POST .../statements/:sid/validate    POST .../statements/:sid/settle
+GET/POST /api/ext/ip/license-audits    GET/POST /api/ext/ip/license-compliance    GET/POST /api/ext/ip/license-consents    GET /api/ext/ip/royalty-dashboard
+GET/POST/PUT /api/ext/ip/options    POST .../options/:id/value    POST .../options/:id/decision    POST .../options/:id/convert    GET /api/ext/ip/options/expiring?within=90
+GET /api/ext/ip/cost-dashboard    GET /api/ext/ip/portfolio-analytics
+```
+
+### Core Logic
+1. Invention disclosure committee review se file/hold/trade-secret decision hota hai. "File" par `ip_asset` ban jata hai aur docketing start. "Trade secret" par `trade_secret_register` mein entry (details restricted).
+2. Docket rules jurisdiction + IP type + filing date se deadlines auto-calculate karte hain (priority 12-month, PCT national phase, annuity/renewal due dates, response deadlines). Rules config table se, taaki law change par update ho.
+3. Har docket item ke teen reminders (config days pehle) aur miss hone ke risk par escalation. Grace period alag track hoti hai, aur "lapsed" status ka alert IP head ko turant.
+4. Annuity/renewal ke liye "pay / abandon / review" decision value-based hota hai (business unit usage, licensing income, strategic importance). Abandon decision approval se, aur abandon hone par rights loss ka warning.
+5. Ownership change (assignment, merger, name change) `ip_chain_of_title` mein, aur register (patent/trademark office) mein record hui ya nahi track hota hai. Unrecorded transfer par flag.
+6. Employee/contractor IP assignment agreement ke bina inventor ko disclosure submit karne par warning (HRIS/Contract link).
+7. Encumbrance (lien/security interest) hone par license/assignment/abandon action par warning aur Legal approval.
+8. Enforcement case Module 4 ke dispute workflow se link hota hai, aur evidence log, cease-and-desist template, aur outcome se portfolio status update.
+9. OSS scan results se license obligations (copyleft vs permissive) nikalte hain, aur incompatible license ke saath product release par flag (Engineering integration).
+10. Trade secret register ka access list HR (joiner/mover/leaver) se sync, exit checklist mein access revoke aur NDA reminder.
+11. License register ke terms (field, territory, exclusivity, minimum) validation mein use hote hain. Royalty statement aane par calculated royalty tiers se compute hoti hai aur reported se compare, variance config % se zyada ho to "disputed" flag aur audit right ke tahat audit trigger.
+12. Royalty payment/receipt AP/AR se, tax withholding (country rules) ke saath, aur Ledger mein post. Minimum guarantee shortfall auto-calc.
+13. Change-of-control/assignment par jin licenses mein consent chahiye, wo list auto-nikalti hai (M&A ke samay).
+14. License expiry/renewal se 120 din (config) pehle review task, aur renewal na ho to product/revenue impact analysis.
+15. Option ka exercise window `option_end` se countdown, 90/60/30 din alerts. Exercise decision valuation worksheet, business case aur approval (DoA) ke baad hi. Lapse hone se pehle explicit "let lapse" decision zaruri (accidental lapse nahi).
+16. Option exercise hone par resulting license/asset record auto-draft hota hai (Tab 3/Tab 1) aur contract, payment aur docket tasks banti hain.
+17. IP cost tracker invoices (Module 4 e-billing) se auto-sync, aur portfolio cost vs budget alert.
+18. `audit_log` har action pe, trade secret records mein field-level masking.
+
+---
+
+# MODULE 6: Public Relations Program (12.5)
+
+## FRONTEND: Screen 6: Public Relations (4 tabs)
+
+**Tab 1. Community Relations** (12.5.1)
+- Community stakeholder map: communities near sites/operations, local leaders, NGOs, schools, associations, vulnerable groups
+- Engagement plan: programs (CSR, volunteering, sponsorships, grants, local hiring, infrastructure), budget, owner, schedule
+- (NEW) Community grievance mechanism: intake, category, SLA, resolution, satisfaction
+- (NEW) Community investment tracker: spend, beneficiaries, outcomes, social impact (SROI-type metrics), reports
+- (NEW) Site-level "social license" health index: engagement frequency, grievances, sentiment
+- (NEW) Employee volunteering and matching-gift tracking
+- (NEW) Impact stories library (approved for use in reports/media)
+
+**Tab 2. Media Relations** (12.5.2)
+- Media contact CRM: outlets, journalists, beat, language, preference, past coverage, relationship notes
+- Media inquiry log: inquiry, deadline, assigned spokesperson, response, approval, outcome
+- Pitches and briefings: story ideas, embargoes, interviews, media briefings, press conferences
+- (NEW) Media monitoring: coverage feed (news, social, broadcast), sentiment, share of voice, topics, alerts
+- (NEW) Spokesperson program: authorized spokespersons, media training status, topic-expertise
+- (NEW) Crisis communications: playbooks, holding statements, escalation, approval, mass-notification, war-room log
+- (NEW) Social media governance: official accounts register, approval, response guidelines, employee-advocacy guidelines
+- (NEW) Reputation tracking: brand/reputation scores, coverage-to-issue linking, aur board dashboard
+
+**Tab 3. Public Policy & Political Stability** (12.5.3)
+- Political/country risk monitor: country-wise political stability indicators, regulatory climate, civil unrest, sanctions, elections calendar, supply/people safety impact
+- Constructive engagement plan: stakeholder dialogue, multi-stakeholder forums, public-policy positions that support stable, predictable business environment, coordination with Government Relations/Lobbying (Module 2)
+- (NEW) Scenario planning for political events (elections, policy shifts, conflict), triggers and responses, linked to GRC risk register and business resilience
+- (NEW) Public position statements register: approved statements on public-policy topics, version, owner, consistency across countries
+- (NEW) Guardrails: political-neutrality policy, no improper political influence, contribution rules, and anti-bribery checks (Module 2/3)
+- (NEW) Stakeholder sentiment tracker and early-warning alerts for local operations (security, evacuation, comms trigger)
+
+**Tab 4. Press Releases: Create & Issue** (12.5.4, 12.5.5)
+- Create (12.5.4): request intake, purpose/audience, templates, draft editor, fact-check list, quotes approval, boilerplate, multi-language versions, attachments
+- Review and approval: Legal, Disclosure/IR (for price-sensitive), HR/Policy (if relevant), executive approval, version lock
+- Issue (12.5.5): distribution lists (media, wire, web, social, internal), scheduling/embargo, release to newsroom website, multi-channel publishing, delivery tracking, corrections/retractions
+- (NEW) Regulatory disclosure sync: price-sensitive release ko exchange filing ke saath simultaneous (Module 1 IR link)
+- (NEW) Pickup analytics: coverage, reach, sentiment, link back to coverage
+- (NEW) Release calendar and conflict check (kisi aur announcement se clash, earnings quiet period)
+- (NEW) Archive and newsroom (searchable, with retention and takedown rules)
+- (NEW) Template library, brand/style checker, inclusive-language check
+
+### BACKEND: Tables
+```
+community_stakeholders (id, party_id, community_type[residents/leaders/ngo/school/association/vulnerable_group/other], site_id, location_json, influence_score, status)
+community_programs (id, program_type[csr/volunteering/sponsorship/grant/local_hire/infrastructure/other], name, site_id, objectives, budget, currency, start_date, end_date, owner_id, status)
+community_program_outcomes (id, program_id, period, beneficiaries, spend, outcome_metrics_json, social_value_est, report_doc_id)
+community_grievances (id, grievance_no, site_id, party_id, category, description, received_on, sla_due, assigned_to, resolution, resolved_on, satisfaction_score, status)
+social_license_index (id, site_id, period, engagement_score, grievance_score, sentiment_score, index_score, snapshot_at)
+volunteer_activities (id, program_id, employee_id, hours, date, matched_donation, currency)
+impact_stories (id, title, content, program_id, approved_by, approved_on, usage_rights, status)
+media_outlets (id, party_id, outlet_type[print/online/tv/radio/social/trade/wire], reach_json, language_code, country, status)
+media_contacts (id, outlet_id, contact_id, beat, preferences_json, last_contact_on, notes)
+media_inquiries (id, inquiry_no, outlet_id, contact_id, received_on, deadline, topic, assigned_spokesperson_id, response_text, approval_request_id, responded_on, outcome, status)
+media_pitches (id, title, angle, target_outlets_json, embargo_until, owner_id, status, outcome)
+media_events (id, event_type[briefing/interview/press_conference/other], date, spokesperson_id, outlets_json, materials_doc_id, status)
+media_coverage (id, source, url, headline, published_on, outlet_id, sentiment, reach, topics_json, linked_issue_id, linked_release_id)
+spokesperson_training (id, user_id, training_type, completed_on, valid_until, score)
+crisis_comm_plans (id, crisis_type, playbook_doc_id, holding_statements_json, escalation_json, approvers_json, last_tested_on, status)
+crisis_events_comm (id, crisis_ref (disruption_events/remediation_cases/matters), activated_at, timeline_json, statements_issued_json, closed_at)
+social_accounts (id, platform, handle, owner_id, approver_id, status, guidelines_doc_id)
+reputation_scores (id, period, source, score, drivers_json, snapshot_at)
+political_risk_indicators (id, country_id, period, indicator_json, risk_level, source, assessed_by)
+political_events_calendar (id, country_id, event_type[election/policy_change/unrest/sanction/other], event_date, impact_assessment, response_plan_ref, status)
+engagement_plans_policy (id, topic, target_stakeholders_json, objectives, owner_id, linked_lobbying_activity_id, start_date, end_date, status)
+public_position_statements (id, topic, statement, version, country_id, approved_by, effective_from, effective_to, status)
+political_scenarios (id, event_id, scenario, triggers_json, responses_json, linked_risk_id, linked_resilience_plan_id)
+sentiment_alerts (id, site_id, source, signal, severity, raised_on, action_taken, status)
+press_release_requests (id, request_no, requester_id, purpose, audience_json, topic, price_sensitive, deadline, status)
+press_releases (id, request_id, title, language_code, version, body, boilerplate_id, status[draft/in_review/approved/scheduled/issued/withdrawn], scheduled_for, embargo_until, issued_at, approval_request_id, locked_hash, document_id)
+press_release_reviews (id, release_id, reviewer_role[legal/disclosure/hr/executive/other], reviewer_id, decision, comments, reviewed_on)
+press_release_facts (id, release_id, claim, source_ref, verified_by, verified_on)
+press_release_quotes (id, release_id, speaker_ref, quote_text, approved_by, approved_on)
+distribution_lists (id, name, list_type[media/wire/web/social/internal/stakeholder], recipients_json, language_code)
+release_distributions (id, release_id, channel, list_id, sent_at, delivered_count, opens, status)
+release_corrections (id, release_id, correction_type[correction/retraction/update], text, issued_at, approved_by)
+release_pickups (id, release_id, coverage_id, reach, sentiment)
+newsroom_posts (id, release_id, published_at, visibility, archived_on, takedown_on)
+```
+
+### BACKEND: APIs
+```
+GET/POST/PUT /api/ext/pr/community/stakeholders    GET/POST/PUT .../community/programs    GET/POST .../community/programs/:id/outcomes
+GET/POST/PUT /api/ext/pr/community/grievances    GET /api/ext/pr/community/social-license    GET/POST /api/ext/pr/community/volunteering    GET/POST/PUT /api/ext/pr/community/stories
+GET/POST/PUT /api/ext/pr/media/outlets    GET/POST/PUT .../media/contacts    GET/POST/PUT .../media/inquiries    PUT .../inquiries/:id/respond
+GET/POST/PUT /api/ext/pr/media/pitches    GET/POST/PUT .../media/events    GET /api/ext/pr/media/coverage    POST .../coverage/import    GET /api/ext/pr/media/analytics
+GET/POST /api/ext/pr/spokespersons    GET/POST/PUT /api/ext/pr/crisis/plans    POST .../crisis/activate    POST .../crisis/statements
+GET/POST/PUT /api/ext/pr/social-accounts    GET /api/ext/pr/reputation
+GET/POST /api/ext/pr/political/indicators    GET/POST/PUT .../political/events    GET/POST/PUT .../political/scenarios    GET/POST/PUT .../political/engagement-plans
+GET/POST/PUT /api/ext/pr/positions    PUT .../positions/:id/publish    GET /api/ext/pr/political/alerts
+POST /api/ext/pr/releases/requests    GET/POST/PUT /api/ext/pr/releases    POST .../releases/:id/translate    POST .../releases/:id/submit-review    PUT .../releases/:id/review
+POST /api/ext/pr/releases/:id/schedule    POST .../releases/:id/issue    POST .../releases/:id/correct    PUT .../releases/:id/withdraw
+GET/POST/PUT /api/ext/pr/distribution-lists    GET /api/ext/pr/releases/:id/tracking    GET /api/ext/pr/releases/calendar    GET /api/ext/pr/newsroom
+```
+
+### Core Logic
+1. Community program ke outcomes (beneficiaries, spend, social value) period-wise capture hote hain, aur CSR/ESG reports mein auto-pull. Budget Ledger se compare hota hai.
+2. Community grievance ka SLA category wise, overdue par site head ko escalation, aur high-severity grievance GRC 11.0 risk/issue mein auto-link. Satisfaction survey close ke baad.
+3. Social license index = weighted (engagement frequency, open grievances, sentiment). Index gir kar threshold se neeche aaye to site-level action plan.
+4. Media inquiry sirf `authorized_spokespersons` se jawab. Inquiry par deadline timer, aur sensitive topic (price-sensitive, litigation, regulator) mein Legal/IR approval ke bina response nahi.
+5. Media contacts consent aur privacy rules ke saath, aur opt-out respect.
+6. Media coverage import se sentiment, reach, topic tagging; negative coverage spike par PR head + owner ko alert, aur linked issue/risk auto-suggest.
+7. Crisis activation par playbook, holding statement aur approvers load hote hain. Statements ek hi source se jaate hain (consistency), aur timeline log hota hai. GRC 11.0 (business resilience/remediation) ke events se auto-trigger.
+8. Social accounts ka owner aur approver, aur official account ke bina koi channel "company voice" nahi.
+9. Political/country risk indicators se risk level, aur level badhne par GRC risk register mein auto-risk suggestion aur resilience plan (11.4) review task.
+10. Political scenarios mein triggers aur responses defined hote hain (security, staff safety, comms, supply). Trigger fire hone par crisis comm aur HR/Security ko alert.
+11. Public position statements approve hone ke baad version-locked, aur country-wise consistency check (ek hi topic par alag-alag countries mein contradiction flag). Position lobbying activities (Module 2) mein use hoti hai.
+12. Guardrails: company political neutrality policy, aur koi bhi political activity (contribution, endorsement, event sponsorship) Module 2 ki pre-clearance aur anti-bribery checks se guzarta hai.
+13. **Press release create:** Request se draft; fact list (`press_release_facts`) mein har claim ka source aur verifier zaruri, aur quotes speaker approval ke bina allowed nahi.
+14. Review: Legal sab releases ke liye. `price_sensitive` flag par Disclosure Committee/IR review zaruri aur exchange filing sync. Executive approval ke baad version hash lock, aur edit par re-approval.
+15. **Issue:** Release calendar se conflict check (earnings quiet period, anya announcement, holiday), embargo time ka enforcement, aur multi-language versions simultaneous.
+16. Price-sensitive release pehle exchange filing, phir media/wire (ya simultaneously, country rules config). Issue ke baad selective disclosure check ke liye audit trail.
+17. Distribution multi-channel (wire, email, web, social, internal), delivery/open tracking, aur correction/retraction ka alag approval workflow aur public notice.
+18. Newsroom archive retention aur takedown rules config se, legal hold lagne par takedown/delete block.
+19. Pickup analytics release-wise coverage, reach aur sentiment ko link karti hai, aur quarterly PR report mein.
+20. `audit_log` har action pe.
+
+---
+
+# COVERAGE MATRIX (APQC 12.0 chart vs guide)
+
+| APQC | Kahan covered hai |
+|---|---|
+| 12.1.1 Lender relations | M1 · Tab 1 |
+| 12.1.2 Analyst relations | M1 · Tab 2 |
+| 12.1.3 Shareholder communications | M1 · Tab 3 |
+| 12.2.1.1 Assess relationships | M2 · Tab 1 |
+| 12.2.1.2 Appoint responsible executives | M2 · Tab 1 |
+| 12.2.1.3 Monitor relationships | M2 · Tab 1 |
+| 12.2.1.4 Input from internal advisors | M2 · Tab 1 |
+| 12.2.1.5 Input from external advisors | M2 · Tab 1 |
+| 12.2.1.6 Liaise with authorities | M2 · Tab 1 |
+| 12.2.2.1 Establish relationships with agencies | M2 · Tab 2 |
+| 12.2.2.2 Respond to audit inquiries | M2 · Tab 2 |
+| 12.2.2.3 Maintain documentation of contacts | M2 · Tab 2 |
+| 12.2.2.4 Plan and manage meetings | M2 · Tab 2 |
+| 12.2.3.1 Evaluate strategic relationship needs | M2 · Tab 3 |
+| 12.2.3.2 Monitor partnership success | M2 · Tab 3 |
+| 12.2.3.3 Extend or change relationships | M2 · Tab 3 |
+| 12.2.4 Manage lobby activities | M2 · Tab 4 |
+| 12.3.1 Report financial results | M1 · Tab 4 |
+| 12.3.2 Report audit findings | M1 · Tab 4 |
+| 12.4.1 Ethics policies | M3 · Tab 1 |
+| 12.4.2 Corporate governance policies | M3 · Tab 2 |
+| 12.4.3 Preventive law programs | M3 · Tab 3 |
+| 12.4.4.1 Plan and initiate compliance program | M3 · Tab 4 |
+| 12.4.4.2 Execute compliance program | M3 · Tab 4 |
+| 12.4.5.1 Assess problem and work requirements | M4 · Tab 1 |
+| 12.4.5.2 Engage/retain outside counsel | M4 · Tab 1 |
+| 12.4.5.3 Receive strategy/budget | M4 · Tab 1 |
+| 12.4.5.4 Receive and monitor work product | M4 · Tab 1 |
+| 12.4.5.5 Process payment for legal services | M4 · Tab 2 |
+| 12.4.5.6 Track legal activity/performance | M4 · Tab 2 |
+| 12.4.6.1 Copyrights, patents, trademarks | M5 · Tab 1 |
+| 12.4.6.2 IP rights and restrictions | M5 · Tab 2 |
+| 12.4.6.3 Licensing terms | M5 · Tab 3 |
+| 12.4.6.4 Options | M5 · Tab 4 |
+| 12.4.7 Disputes and litigation | M4 · Tab 3 |
+| 12.4.8 Legal advice/counseling | M4 · Tab 4 |
+| 12.4.9 Negotiate and document agreements/contracts | M4 · Tab 5 |
+| 12.5.1 Community relations | M6 · Tab 1 |
+| 12.5.2 Media relations | M6 · Tab 2 |
+| 12.5.3 Promote political stability | M6 · Tab 3 |
+| 12.5.4 Create press releases | M6 · Tab 4 |
+| 12.5.5 Issue press releases | M6 · Tab 4 |
+
+**Screens: 6, Tabs: 25 (4 + 4 + 4 + 5 + 4 + 4)**, aur chart ke saare 42 leaf items covered hain.
+
+**Cross-module links (jo duplicate nahi kiye, link kiye hain):**
+- Internal Audit findings, controls, obligations, attestations, speak-up, remediation (11.0 GRC) ko Board Reporting (M1), Compliance Program (M3) aur Audit Inquiries (M2) reuse karte hain.
+- Legal hold aur matter-based privilege: M4 mein master, baaki modules link karte hain.
+- Contract master M4 mein hai, aur IP licenses/options (M5) usi se linked hain.
+- Gifts/hospitality aur anti-bribery gate: 11.0 `gifts_hospitality` ek hi jagah, M2 aur M6 use karte hain.
+
+**Abhi jaanbujh ke nahi daala (tune bola tha baad mein):** infra, security hardening, SSO/RBAC implementation, scale/performance design. Yahan sirf business-level controls hain (privilege, maker-checker, selective-disclosure guard, anti-bribery gate).
+
+**Ek zaruri note:** Reg FD, MAR, LDA, anti-bribery limits jaise legal rules country ke hisaab se badalte hain, isliye maine sab `country_config`/`disclosure_rules` mein rakha hai. Production se pehle har country ke rules apne legal counsel se verify karwa lena.
+
+Agla section (13.0, 1.0 se 10.0 ke koi aur) bhej de ya is guide ko aur deep karna hai to bata dena.

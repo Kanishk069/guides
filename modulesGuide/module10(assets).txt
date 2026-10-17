@@ -1,0 +1,1267 @@
+Theek hai bhai, pehle web search karke latest enterprise EAM/CMMS/capital-project features dekhta hu, phir poora guide ek piece mein chat mein dunga.
+
+Ye le bhai, poora guide ek hi piece mein. Research se 7 cheezein liya: EAM vs CMMS scope, ISO 55001:2024 (SAMP), capital stage-gate aur EVM, IWMS lease accounting, RCM/FMEA, ISO 14224 failure codes, aur ARO accounting.
+
+# COVERAGE: APQC 10.0 → 16 SCREENS, 83 TABS
+
+72 APQC sub-processes ka har ek apna tab hai (tab heading mein code likha hai), plus 11 enterprise-extra tabs jinpe **(E)** likha hai. Kuch miss nahi hoga.
+
+---
+
+# COMMON FOUNDATION (sab screens pe lagu)
+
+**Common rules:** API prefix `/api/eam/...`. Har create/edit/action `audit_log` mein jayega. Har master `effective_from/effective_to` aur `status[draft/active/disabled]` ke saath (delete nahi, disable). Har table mein `entity_id` (multi-company). Policy, rate, threshold, SLA, formula **config tables** mein, hardcode nahi. Har amount ke saath `currency`, reports mein base-currency conversion. Har record ke saath optional `site_id/asset_id/geo_point`. Standard list API: pagination, filter, sort, bulk import/export, webhooks, idempotency key. Mobile offline-first (sync conflict rules). "As-of date" se koi bhi report chal sake.
+
+**Shared engines (ek baar bane, sab use kare):** Work Order Engine, Project/WBS Engine, Asset Registry, Approval Engine (parallel/conditional/send-back/delegation/SLA escalation), Notification Engine, Document Store, Permit Engine, Inspection/Checklist Engine, CAPA Engine, Risk Register.
+
+**Reuse (HR foundation se jaisa hai):**
+```
+audit_log, approval_workflows, approval_requests, approval_actions, approval_delegations, notifications, documents, comments,
+custom_fields, custom_objects, translations, reason_codes, business_events, currencies, exchange_rates, legal_entities,
+countries, country_config, fiscal_calendars, employees (ref), org_units (ref), cost_centers (ref), locations (ref)
+```
+
+**Asset foundation tables:**
+```
+sites (id, entity_id, name, site_type[campus/office/plant/warehouse/datacenter/retail/field/land/linear_route], country_id, address_json, geo_point, geo_polygon, timezone, ownership[owned/leased/managed], status)
+buildings (id, site_id, name, year_built, gross_area, usable_area, floors, certifications_json, status)
+spaces (id, building_id, floor, parent_space_id, space_type[office/lab/server_room/meeting/storage/common/outdoor], area, capacity, cost_center_id, status)
+asset_classes (id, name, parent_id, category[real_estate/building_system/equipment/vehicle/it/infrastructure/linear], default_life_months, depreciation_method, failure_class_id, attribute_schema_json, default_criticality, status)
+assets (id, asset_tag, name, asset_class_id, parent_asset_id, site_id, building_id, space_id, geo_point, serial_no, manufacturer, model, vendor_id, acquisition_date, acquisition_cost, currency, in_service_date, warranty_end, expected_life_months, status[planned/under_construction/commissioning/active/standby/under_maintenance/decommissioned/disposed/abandoned], criticality, cost_center_id, owner_id, custodian_id, fixed_asset_id, barcode, rfid, iot_device_id, bim_guid, attributes_json)
+asset_hierarchies (id, name, type[functional_location/physical/system/process/linear/financial], status) / asset_hierarchy_nodes (id, hierarchy_id, asset_id, parent_node_id, effective_from, effective_to)
+asset_meters (id, asset_id, meter_type, uom, last_reading, last_read_at) / meter_readings (id, meter_id, value, read_at, source[manual/iot/import])
+asset_status_history (id, asset_id, from_status, to_status, reason_code_id, changed_by, changed_at, ref_module, ref_id)
+vendors (id, name, vendor_type[contractor/supplier/oem/consultant/broker/landlord/recycler/transporter/disposal_firm], tax_id, rating, prequal_status, insurance_expiry, status)
+contracts (id, vendor_id, contract_type, scope, start_date, end_date, value, currency, sla_json, renewal_rule_json, status, document_id)
+work_orders (id, wo_no, wo_type[preventive/predictive/corrective/emergency/inspection/construction/commissioning/modification/relocation/decommission/demolition], asset_id, space_id, project_id, priority, status, requested_by, planner_id, scheduled_start, scheduled_end, actual_start, actual_end, failure_code_id, permit_id, cost_actual, currency)
+work_order_tasks / work_order_labor / work_order_materials / work_order_services (wo_id + task/craft/item/vendor, planned, actual, cost)
+projects (id, project_no, project_type[capital/construction/modification/relocation/decommission/demolition/remediation], program_id, sponsor_id, pm_id, baseline_version, status)
+wbs_elements (id, project_id, parent_id, code, name, budget, cost_center_id, status)
+cost_postings (id, ref_module, ref_id, wbs_id, cost_center_id, cost_type[labor/material/service/equipment/overhead], amount, currency, posted_to_ledger, posted_at)
+permits (id, permit_type, ref_module, ref_id, authority, status, valid_from, valid_to, document_id)
+inspection_templates (id, name, applies_to, items_json) / inspections (id, template_id, ref_module, ref_id, result, inspector_id, done_at)
+incidents (id, incident_type[safety/security/environment/quality/near_miss], site_id, asset_id, severity, description, status, reported_at)
+risks (id, ref_module, ref_id, category, likelihood, impact, score, mitigation, owner_id, status)
+capa (id, source_module, source_id, action, owner_id, due_date, status, verified_by)
+```
+
+**Dependencies (naam se):** Employee Master (HR tool), Ledger/Fixed Assets, Procurement, Inventory, Time & Attendance, Payroll (labor cost), Approval Engine, Notification Engine, Document Store, Scheduling Engine, GIS, IoT Gateway, Analytics, ESS/Mobile.
+
+---
+
+# PART 1: PLAN AND ACQUIRE ASSETS (10.1)
+
+## SCREEN 1: Property Strategy and Long-Term Vision (10.1.1) — 3 tabs
+
+### FRONTEND
+
+**Tab 1. Strategy Alignment** (10.1.1.1)
+- Requirement intake from BUs: function, headcount growth, location, timeline, space-per-person standard
+- Link to business objective and HR Workforce Plan, alignment score, gap view (required vs current portfolio)
+- Versioned "Property Strategy" with approval and publish
+
+**Tab 2. External Environment Appraisal** (10.1.1.2)
+- Market data by city/submarket: rent, vacancy, cap rate, construction cost index, land price, labor availability (provider feeds or manual import)
+- Zoning, tax incentives (SEZ etc.), regulatory changes, climate risk (flood, seismic, heat), geopolitical risk
+- PESTLE scorecard, threshold alerts (rent jump, vacancy drop)
+
+**Tab 3. Build / Buy / Lease Decision** (10.1.1.3)
+- Scenario builder: build, buy, lease, build-to-suit, sale-and-leaseback, co-working/flex
+- NPV/IRR/TCO over horizon (discount rate from config), sensitivity analysis, qualitative scoring (flexibility, control, risk)
+- Accounting impact preview (IFRS 16 / ASC 842), decision memo, approval levels by value, link to Capital Plan (Screen 5)
+
+### BACKEND: Tables
+```
+property_requirements (id, requesting_unit_id, function, headcount, location_pref, need_by, area_standard, status)
+property_strategies (id, name, horizon_years, version, objectives_json, status, approval_request_id, effective_from)
+strategy_objective_links (id, strategy_id, business_objective_ref, wfp_plan_id, alignment_score)
+market_indicators (id, city, submarket, indicator[rent/vacancy/cap_rate/cost_index/land_price], value, currency, as_of_date, source_id)
+market_sources (id, name, type[feed/manual/broker], status)
+external_risk_assessments (id, site_or_city_ref, risk_type[climate/regulatory/political/supply], score, details_json, as_of_date)
+incentive_programs (id, country_id, region, name, benefit_json, valid_to)
+acquisition_scenarios (id, strategy_id, scenario_type[build/buy/lease/btl/slb/flex], horizon_years, discount_rate, assumptions_json, npv, irr, tco, status)
+scenario_cash_flows (id, scenario_id, period, line_item, amount, currency)
+scenario_scores (id, scenario_id, criterion, weight, score)
+decision_records (id, scenario_id, decision, rationale, decided_by, approval_request_id, decided_on)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/strategy/requirements
+GET/POST/PUT /api/eam/strategy/property-strategies      POST .../:id/publish
+GET/POST /api/eam/strategy/market-indicators            POST .../market-indicators/import
+GET/POST/PUT /api/eam/strategy/external-risks
+GET/POST/PUT /api/eam/strategy/scenarios                POST .../scenarios/:id/compute    GET .../scenarios/compare?ids=1,2,3
+POST /api/eam/strategy/scenarios/:id/sensitivity        POST .../scenarios/:id/decide
+```
+### Core Logic
+1. Har requirement ek business objective se link, aur approved strategy ka portfolio gap (required area - current usable area) auto-calc.
+2. Strategy versioned hai, publish par purana `effective_to`, approval Approval Engine se.
+3. Market indicator threshold cross par owner ko alert.
+4. Scenario NPV = discounted net cash flows; TCO mein rent/purchase, fit-out, opex, taxes, exit/restoration cost sab aate hain.
+5. Lease scenario mein IFRS 16/ASC 842 ROU asset aur liability ka balance-sheet preview.
+6. Sensitivity: ek assumption (rent escalation, discount rate, occupancy) badlo to NPV ka change.
+7. Decision value threshold ke hisaab se approval levels, approve hone par Capital Plan (Screen 5) aur Facility Planning (Screen 2) ko feed.
+8. `audit_log` har action pe.
+
+---
+
+## SCREEN 2: Facility Planning and Procurement (10.1.2) — 6 tabs
+
+### FRONTEND
+
+**Tab 1. Design Facility** (10.1.2.1)
+- Program of requirements: functions, headcount, adjacencies, space standards, block/stacking plans
+- Design stages (concept → schematic → detailed), CAD/BIM upload with revisions, sustainability targets (LEED/IGBC/energy), accessibility compliance, design review sign-offs
+
+**Tab 2. Analyze Budget** (10.1.2.2)
+- Capex/opex/one-time budget, estimate classes (rough → definitive), cost per sq ft benchmark, contingency
+- Budget vs estimate vs bid, life-cycle cost, funding source, multi-currency, approval
+
+**Tab 3. Select Property** (10.1.2.3)
+- Candidate pipeline (kanban), weighted criteria scoring, map view, site-visit notes, broker tracking
+- Due-diligence checklist: title, zoning, environmental Phase I/II, structural, fire NOC, utilities, shortlist comparison, final selection approval
+
+**Tab 4. Negotiate Terms** (10.1.2.4)
+- LOI/term sheet, clause library (rent, escalation, CAM, TI allowance, rent-free, break/renewal, ROFR/ROFO, restoration), offer/counter-offer versions
+- Compare against playbook/target, effective-rent NPV, redlines, legal review, approval; signed deal creates lease/purchase record
+
+**Tab 5. Construction / Modification Cockpit** (10.1.2.5)
+- Building project dashboard (scope, contractor, schedule, cost, permits), punch list, occupancy certificate, handover to FM
+- Links to Screens 5-8 (same Project/WBS engine)
+
+**Tab 6. Lease Administration and Accounting (E)**
+- Lease abstract, critical dates (notice windows, options), rent schedule, escalation, CAM/opex reconciliation, deposits, rent payments to AP
+- IFRS 16/ASC 842: ROU asset, lease liability, IBR discount rate, amortization, modification/remeasurement, short-term and low-value exemptions, subleases, journals to Ledger, disclosure reports
+- Lease-end restoration obligation linked to ARO (Screen 12)
+
+### BACKEND: Tables
+```
+facility_programs (id, name, site_id, building_id, status, version, sponsor_id) / program_space_requirements (id, program_id, function, area, headcount, adjacency_json)
+design_versions (id, program_id, stage[concept/schematic/detailed], version, document_id, bim_model_id, approved_by, approved_on)
+design_reviews (id, design_version_id, reviewer_id, comments, decision)
+facility_budgets (id, program_id, fiscal_year, capex, opex, one_time, contingency_pct, currency, status)
+cost_estimates (id, budget_id, estimate_class, total, basis, version) / estimate_lines (id, estimate_id, category, qty, rate, amount)
+property_candidates (id, program_id, name, address, geo_point, ask_price_or_rent, area, broker_id, stage, status)
+scoring_criteria (id, name, weight) / candidate_scores (id, candidate_id, criterion_id, score, notes)
+due_diligence_items (id, candidate_id, item_type, status, finding, document_id, due_date)
+negotiations (id, candidate_id, deal_type[lease/purchase], target_terms_json, status) / negotiation_offers (id, negotiation_id, version, party, terms_json, submitted_on)
+clause_library (id, clause_type, standard_text, fallback_text, risk_level)
+facility_projects (id, project_id, building_id, scope, contractor_id, handover_date, occupancy_cert_id, status)
+leases (id, lease_no, site_id, landlord_vendor_id, commencement, expiry, area, status, currency, entity_id)
+lease_terms (id, lease_id, base_rent, escalation_json, cam_rule_json, tia_amount, free_rent_months, deposit, restoration_clause)
+lease_options (id, lease_id, option_type[renew/break/expand/purchase/rofr], notice_days, exercise_by, terms_json)
+lease_schedules (id, lease_id, period, rent_due, cam_due, status) / lease_payments (id, lease_id, schedule_id, paid_on, amount, ap_ref)
+lease_accounting_runs (id, lease_id, period, ibr, rou_asset, liability, interest, amortization, journal_ref)
+lease_modifications (id, lease_id, effective_date, change_json, remeasurement_json)
+cam_reconciliations (id, lease_id, year, estimated, actual, variance, status)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/facility/programs        GET/POST .../programs/:id/designs        POST .../designs/:id/review
+GET/POST/PUT /api/eam/facility/budgets         GET/POST .../budgets/:id/estimates
+GET/POST/PUT /api/eam/facility/candidates      PUT .../candidates/:id/shortlist|select     GET/POST .../candidates/:id/due-diligence
+GET/POST/PUT /api/eam/facility/negotiations    POST .../negotiations/:id/offers     POST .../negotiations/:id/finalize
+GET/POST/PUT /api/eam/facility/projects        GET .../projects/:id/dashboard
+GET/POST/PUT /api/eam/leases                   GET .../leases/:id/schedule    POST .../leases/:id/accounting/run    POST .../leases/:id/modify
+GET /api/eam/leases/critical-dates             GET .../leases/disclosure-report
+```
+### Core Logic
+1. Design version approve hone par hi budget/estimate finalize ho sakta hai, estimate class ke saath accuracy range config se.
+2. Budget threshold cross par hard block ya soft warning (config) with exception approval.
+3. Candidate ka weighted score = sum(weight x score), due-diligence incomplete ho to final selection block.
+4. Negotiation finalize hone par `leases` record ban jata hai aur terms copy hote hain (selection se lease tak traceability).
+5. Lease accounting monthly auto-run: liability = PV of remaining payments at IBR, ROU asset = liability + initial costs - incentives, journals Ledger ko; modification par remeasurement.
+6. Critical dates (renewal/break notice) se 180/90/30 din pehle alert, config.
+7. Facility project Screens 5-8 ke engine pe chalta hai, handover pe asset status `active`.
+8. `audit_log` har action pe.
+
+---
+
+## SCREEN 3: Workspace and Facilities Provision (10.1.3) — 3 tabs
+
+### FRONTEND
+
+**Tab 1. Acquire Workspace and Facilities** (10.1.3.1)
+- Workspace request (team, headcount, start date, location, type), approval
+- Fulfilment options: existing vacant space, new lease, co-working/flex, furniture/IT/lab equipment procurement (PR/PO link)
+- Move-in readiness checklist, asset tagging on receipt, workspace commissioning
+
+**Tab 2. Change Fit / Form / Function** (10.1.3.2)
+- Change request: move/add/change, reconfiguration, repurposing, retrofit (office → lab)
+- Impact analysis (cost, downtime, code compliance), layout revision, safety/facility approval, work order, as-built floor-plan update, cost recharge, post-change inspection
+
+**Tab 3. Space Management and Booking (E)**
+- Floor plans (CAD/BIM/GIS), space inventory, stacking, allocation and chargeback to org units
+- Desk/room booking (hybrid), hot-desking, neighbourhoods, badge/sensor-based utilization, right-sizing suggestions, space-standard compliance, scenario planner
+
+### BACKEND: Tables
+```
+workspace_requests (id, requested_by, org_unit_id, headcount, space_type, need_by, location_pref, status, approval_request_id)
+workspace_fulfilments (id, request_id, option[existing/new_lease/flex/procure], space_id, lease_id, cost, status)
+workspace_items (id, request_id, item_type[furniture/it/lab/other], qty, po_ref, received_on, asset_id)
+space_change_requests (id, space_id, change_type[mac/reconfig/repurpose/retrofit], reason, requested_by, status, approval_request_id, work_order_id)
+space_change_impacts (id, change_request_id, cost, downtime_days, code_check_json, risk_level)
+space_allocations (id, space_id, org_unit_id, from_date, to_date, seats, chargeback_rate)
+space_chargebacks (id, period, org_unit_id, area, amount, currency, posted)
+floor_plans (id, building_id, floor, version, file_url, source[cad/bim/gis], effective_from)
+booking_resources (id, space_id, resource_type[desk/room/parking/locker], capacity, amenities_json, bookable)
+bookings (id, resource_id, employee_id, start_at, end_at, status, checked_in_at)
+booking_policies (id, resource_type, max_advance_days, max_duration, auto_release_minutes, rules_json)
+occupancy_readings (id, space_id, count, source[badge/sensor/wifi/booking], read_at)
+utilization_snapshots (id, space_id, period, avg_occupancy_pct, peak_pct, booked_vs_used_pct)
+space_standards (id, space_type, grade_id, area_per_person, effective_from)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/workspace/requests          POST .../requests/:id/fulfil
+GET/POST/PUT /api/eam/workspace/changes           POST .../changes/:id/impact    POST .../changes/:id/complete
+GET/POST/PUT /api/eam/space/allocations           GET/POST .../space/chargebacks/run
+GET/POST /api/eam/space/floor-plans
+GET /api/eam/space/utilization?building=X&period=Y     GET .../space/rightsizing
+GET/POST /api/eam/booking/resources    POST .../booking/bookings    PUT .../bookings/:id/checkin|cancel
+```
+### Core Logic
+1. Request pehle vacant space se match hota hai (area, type, adjacency), nahi mila to new-lease/flex option approval.
+2. Change request approve hone par work order banta hai, complete par floor plan aur space type update (effective-dated).
+3. Space chargeback = allocated area x rate, monthly Ledger journal.
+4. Booking: no-show par auto-release (config minutes), policy se advance limit.
+5. Utilization = occupancy / capacity, peak aur average, right-sizing flag jab sustained utilization threshold se neeche ho.
+6. Employee location change (HR event) se seat allocation review trigger.
+7. Received equipment par asset tag auto-create, `assets` registry mein entry.
+8. `audit_log` har action pe.
+
+---
+
+## SCREEN 4: Facilities Operations (10.1.4) — 3 tabs
+
+### FRONTEND
+
+**Tab 1. Relocate People** (10.1.4.1)
+- Move project (individual, team, site-wide), waves, per-employee from → to space, date
+- HR link (work location change event), seat assignment, IT/telecom/badge tasks, relocation assistance (policy, budget, vendor), communications, move-day checklist, post-move survey
+
+**Tab 2. Relocate Material and Tools** (10.1.4.2)
+- Transfer orders (asset/equipment, lines, packing list), movers, insurance, chain of custody, in-transit status
+- Dismantle → move → reinstall → recommission tasks, barcode/RFID scan out/in, damage claims, cross-border docs, cost allocation
+
+**Tab 3. Facility Access and Security** (10.1.4.3)
+- Access zones/policies by role, badge lifecycle (issue/suspend/revoke) tied to HR joiner/mover/leaver
+- Visitor management (pre-register, host approval, watchlist, NDA e-sign), contractor passes (induction, insurance validity)
+- Door controller (PACS) and CCTV integration, incident log, emergency roll-call, periodic access review, key register, parking/lockers
+
+### BACKEND: Tables
+```
+move_projects (id, name, from_site_id, to_site_id, move_type, planned_date, budget, status, owner_id)
+move_waves (id, project_id, wave_no, move_date, status)
+move_people (id, wave_id, employee_id, from_space_id, to_space_id, status, hr_event_id)
+move_tasks (id, project_id, task, owner_id, due_date, status, task_type[it/telecom/badge/furniture/comms])
+relocation_assistance (id, employee_id, move_project_id, policy_ref, amount, currency, vendor_id, status)
+transfer_orders (id, order_no, from_location_id, to_location_id, reason, planned_date, carrier_vendor_id, insurance_ref, status)
+transfer_order_lines (id, order_id, asset_id, qty, condition_out, condition_in, scanned_out_at, scanned_in_at, damage_flag)
+custody_events (id, asset_id, from_party, to_party, event_at, ref_module, ref_id)
+access_zones (id, site_id, name, security_level, parent_zone_id, status)
+access_policies (id, zone_id, rule_json[role/grade/function/employment_type], time_rule_json, effective_from)
+access_credentials (id, holder_type[employee/visitor/contractor], holder_id, credential_type[badge/biometric/mobile], status, issued_on, revoked_on)
+access_events (id, credential_id, door_id, event_at, result[granted/denied], reason)
+visitors (id, name, company, id_ref, watchlist_flag) / visitor_visits (id, visitor_id, host_id, site_id, purpose, scheduled_at, checked_in_at, checked_out_at, nda_doc_id, status)
+contractor_passes (id, vendor_id, worker_name, zones_json, valid_from, valid_to, induction_done, insurance_ok, status)
+key_register (id, key_ref, space_id, holder_id, issued_on, returned_on)
+access_reviews (id, zone_id, reviewer_id, period, findings_json, status)
+emergency_rollcalls (id, site_id, event_id, started_at, accounted_count, missing_count, closed_at)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/moves/projects      GET/POST .../projects/:id/waves    GET/POST .../projects/:id/people    POST .../projects/:id/notify
+GET/POST/PUT /api/eam/transfers           POST .../transfers/:id/ship|receive    GET .../transfers/:id/custody
+GET/POST/PUT /api/eam/access/zones        GET/POST/PUT .../access/policies    POST .../access/credentials/:id/revoke
+GET/POST /api/eam/access/visitors         POST .../visits/:id/checkin|checkout    GET .../access/events
+POST /api/eam/access/reviews/start        POST /api/eam/security/rollcall/start
+```
+### Core Logic
+1. Move complete par `employee_assignments.location_id` HR ko business event ke through update, seat aur access auto-change.
+2. HR joiner/mover/leaver event se credential grant/modify/revoke, leaver par same-day revoke SLA.
+3. Transfer scan-out par asset status `in_transit`, scan-in par new location, discrepancy ya damage par claim aur CAPA.
+4. Visitor watchlist match par check-in block aur security alert.
+5. Contractor pass tabhi valid jab induction aur insurance valid, expiry par auto-suspend.
+6. Access review quarterly, reviewer unused/extra access revoke kar sakta hai, non-response par escalation.
+7. Emergency roll-call mein badge in/out data se accounted vs missing real-time.
+8. `audit_log` har action pe, access events immutable.
+
+---
+
+# PART 2: DESIGN AND CONSTRUCT ASSETS (10.2)
+
+## SCREEN 5: Capital Program Management (10.2.1) — 3 tabs
+
+### FRONTEND
+
+**Tab 1. Define Capital Investment Plan** (10.2.1.1)
+- Idea funnel: business case, options, cost, benefits; scoring (strategic fit, NPV/IRR/payback, risk, urgency, regulatory)
+- Portfolio optimizer under budget cap (funding cut line), multi-year plan by category (growth/sustaining/regulatory/IT), scenarios and what-if cuts
+- Stage-gates G0 → G5 with appropriation/AFE approvals
+
+**Tab 2. Monitor Capital Program** (10.2.1.2)
+- Budget, commitment, actual, forecast (EAC/ETC), earned value (PV, EV, AC, CPI, SPI), S-curves, contingency drawdown
+- Change-order log, monthly forecast snapshots, RAG status, benefits tracking, CWIP → capitalization, threshold alerts, lessons learned
+
+**Tab 3. Secure Construction Financing** (10.2.1.3)
+- Funding sources: internal cash, term/construction loan, project finance, bonds/green bonds, leasing, grants/incentives, JV equity
+- Drawdown schedule tied to milestones, draw requests, lender conditions (independent engineer certificate), covenants (DSCR/LTV) and tests, guarantees/LCs, hedging link
+- Capitalized borrowing cost calculation
+
+### BACKEND: Tables
+```
+capital_ideas (id, title, sponsor_id, category, problem, options_json, est_cost, currency, stage, status)
+capital_business_cases (id, idea_id, npv, irr, payback_years, benefits_json, risk_score, version)
+capital_scoring_models (id, name, criteria_json, status) / capital_scores (id, idea_id, model_id, total_score, breakdown_json)
+capital_plan_versions (id, name, fiscal_years, budget_cap, version, status) / capital_plan_lines (id, plan_version_id, idea_id, year, amount, funding_source_id, rank, funded)
+stage_gate_definitions (id, gate_code, name, required_deliverables_json, approver_roles_json, estimate_accuracy)
+stage_gate_reviews (id, project_id, gate_code, decision[go/hold/recycle/kill], reviewed_on, approval_request_id, notes)
+appropriations (id, project_id, amount, currency, approved_on, approval_request_id, status)
+project_budgets (id, project_id, wbs_id, original, approved_changes, current, currency)
+project_commitments (id, project_id, wbs_id, source[po/subcontract], amount, ref_id)
+project_forecasts (id, project_id, snapshot_date, eac, etc, forecast_by_period_json, confidence)
+earned_value_snapshots (id, project_id, as_of_date, pv, ev, ac, cpi, spi, bac, eac)
+change_orders (id, project_id, title, cost_impact, schedule_impact_days, reason_code_id, status, approval_request_id)
+contingency_log (id, project_id, type[management_reserve/contingency], amount, reason, change_order_id)
+cwip_capitalization (id, project_id, asset_id, amount, capitalized_on, journal_ref)
+funding_sources (id, name, type, limit, rate_json, status)
+financing_facilities (id, funding_source_id, lender, amount, currency, tenor, rate_type, secured_by, status)
+drawdown_schedules (id, facility_id, milestone_ref, planned_date, planned_amount)
+draw_requests (id, facility_id, amount, conditions_met_json, requested_on, funded_on, status)
+covenants (id, facility_id, metric, threshold, test_frequency) / covenant_tests (id, covenant_id, period, value, pass, notes)
+borrowing_cost_calcs (id, project_id, period, avg_expenditure, rate, capitalized_amount, journal_ref)
+guarantees (id, facility_id, type[bank_guarantee/lc/surety], amount, issuer, expiry)
+grants (id, project_id, scheme, amount, claim_status, claimed_on)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/capital/ideas          POST .../ideas/:id/score    POST .../ideas/:id/advance-gate
+GET/POST/PUT /api/eam/capital/plans          POST .../plans/:id/optimize    GET .../plans/compare?ids=1,2
+GET/POST /api/eam/capital/stage-gates        GET/POST/PUT /api/eam/capital/appropriations
+GET /api/eam/capital/programs/:id/dashboard  GET .../projects/:id/earned-value    POST .../projects/:id/forecast-snapshot
+GET/POST/PUT /api/eam/capital/change-orders  POST .../change-orders/:id/submit
+POST /api/eam/capital/projects/:id/capitalize
+GET/POST/PUT /api/eam/finance/facilities     POST .../facilities/:id/draw-request     GET/POST .../facilities/:id/covenants/test
+POST /api/eam/finance/borrowing-cost/run
+```
+### Core Logic
+1. Idea gate-by-gate aage badhta hai, har gate ke deliverables complete na ho to advance block, approval Approval Engine se.
+2. Plan optimizer: score/NPV ke hisaab se rank karke budget cap tak fund, cut line ke neeche wale deferred.
+3. Appropriation (AFE) approve hone ke baad hi commitments (PO/subcontract) banenge, limit cross par block ya exception approval.
+4. CPI = EV/AC, SPI = EV/PV, EAC (config method: BAC/CPI ya bottom-up), cost data Ledger/Procurement se aur schedule Screen 7 se.
+5. Change order approve hone par budget `approved_changes`, contingency drawdown track, thresholds se approval levels.
+6. Completion par CWIP → fixed asset capitalization (Ledger), in-service date commissioning (Screen 8 tab 5) se.
+7. Borrowing cost capitalization qualifying asset par (IAS 23 / ASC 835-20 style, config), average expenditure x rate.
+8. Draw request tabhi jab conditions complete (milestone aur lender-engineer certificate), covenant breach par alert aur escalation.
+9. `audit_log` har action pe.
+
+---
+
+## SCREEN 6: Construction Design and Planning (10.2.2) — 5 tabs
+
+### FRONTEND
+
+**Tab 1. Develop Construction Strategy** (10.2.2.1)
+- Delivery method (DBB, DB, EPC/EPCM, CM-at-risk, IPD, PPP/BOT), contract type (lump sum, unit rate, cost-plus, GMP), work packaging
+- Long-lead and owner-supplied items, risk allocation, phasing/logistics, constructability review, value engineering log, strategy approval
+
+**Tab 2. Construction Performance Management** (10.2.2.2)
+- KPI framework (cost, schedule, quality, safety, rework, productivity), targets per package, reporting cadence
+- Contractor scorecards, delay events and claims, LD/incentive rules, change-management process (RFC → impact → approval)
+
+**Tab 3. Obtain Construction Permissions** (10.2.2.3)
+- Permit register: building plan, zoning, environmental clearance/EIA, fire NOC, utilities, height clearance, labor licences, occupancy certificate
+- Authority workflow, required-doc checklist, fees, dependencies on critical path, validity/expiry, approval conditions tracker, consultations
+
+**Tab 4. Design Assets** (10.2.2.4)
+- Design packages by discipline (arch/struct/MEP/civil/process), drawing register with revisions and transmittals
+- BIM coordination and clash results, design reviews, specification library, interface management, asset-data requirements (what data must reach the registry: COBie/ISO 19650 style), e-sign stamps
+
+**Tab 5. Plan Construction Resources** (10.2.2.5)
+- Labor (crafts), equipment, material, subcontractor plan; BOQ, rate libraries, resource histogram and levelling
+- Long-lead procurement schedule, laydown/logistics plan, mobilization, skills/certification needs (HR link), shortage alerts
+
+### BACKEND: Tables
+```
+construction_strategies (id, project_id, delivery_method, contract_type, packaging_json, phasing_json, esg_goals_json, version, status, approval_request_id)
+work_packages (id, project_id, wbs_id, name, contract_type, planned_vendor_id, est_cost, long_lead)
+risk_allocations (id, strategy_id, risk, owner_party, mitigation) / constructability_reviews (id, project_id, findings_json, reviewer_id, date)
+value_engineering_items (id, project_id, idea, saving, impact, status)
+construction_kpis (id, name, formula, category, threshold_json) / kpi_targets (id, package_id, kpi_id, target) / kpi_actuals (id, package_id, kpi_id, period, value)
+contractor_scorecards (id, vendor_id, project_id, period, scores_json, total)
+delay_events (id, project_id, cause, party, days, start_date, end_date, evidence_doc_id) / claims (id, project_id, vendor_id, claim_type, amount, days, status)
+ld_incentive_rules (id, contract_id, rule_type, trigger_json, rate, cap)
+permit_types (id, country_id, name, authority, required_docs_json, typical_days, validity_months)
+permit_applications (id, project_id, permit_type_id, status, applied_on, approved_on, valid_to, fee, conditions_json)
+permit_dependencies (id, permit_id, depends_on_activity_id, hold_type)
+design_packages (id, project_id, discipline, status, lead_id) / drawings (id, package_id, drawing_no, title, current_rev) / drawing_revisions (id, drawing_id, rev, file_url, issued_on, status)
+transmittals (id, package_id, to_party, items_json, sent_on)
+model_clash_results (id, project_id, run_date, clash_count, critical_count, resolved_count, report_doc_id)
+specifications (id, spec_code, title, version, document_id)
+asset_data_requirements (id, project_id, asset_class_id, required_attributes_json, standard[cobie/custom])
+resource_plans (id, project_id, version, status) / resource_requirements (id, plan_id, resource_type, craft_or_item, qty, start_date, end_date)
+boq_items (id, project_id, wbs_id, item_code, uom, qty, rate_id, amount) / rate_libraries (id, name, rates_json, effective_from, currency)
+laydown_plans (id, project_id, area_json, schedule_json)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/construction/strategies    POST .../strategies/:id/submit
+GET/POST/PUT /api/eam/construction/packages
+GET/POST/PUT /api/eam/construction/kpis          GET .../kpi-actuals     GET/POST .../scorecards    GET/POST .../delay-events    GET/POST .../claims
+GET/POST/PUT /api/eam/construction/permits       POST .../permits/:id/submit    GET .../permits/critical-path
+GET/POST/PUT /api/eam/design/packages            GET/POST .../packages/:id/drawings    POST .../drawings/:id/revise    POST .../design/transmittals
+POST /api/eam/design/clash-results/import
+GET/POST/PUT /api/eam/construction/resource-plans    GET .../resource-plans/:id/histogram    GET/POST .../boq    POST .../boq/price
+```
+### Core Logic
+1. Strategy approve hone ke baad work packages freeze, delivery method se contract templates auto-select.
+2. KPI actuals Screen 7/8 ke progress, quality, safety data se auto-pull.
+3. Delay event + claim linked, concurrent delay analysis ke liye party-wise days; LD = days x rate capped.
+4. Permit dependency: jab tak permit approve nahi, linked activity par "hold" (Screen 7 schedule).
+5. Permit expiry aur condition due dates par alert, renewal workflow.
+6. Drawing sirf latest approved revision "for construction" status mein; purani revisions superseded, transmittal log immutable.
+7. Clash critical count threshold se upar ho to design review gate block.
+8. BOQ price = qty x rate (rate library effective date se), total budget se compare, variance flag.
+9. Resource shortage = demand - available (HR/vendor capacity), alert aur re-plan.
+10. `audit_log` har action pe.
+
+---
+
+## SCREEN 7: Schedule and Perform Construction Work (10.2.3) — 5 tabs
+
+### FRONTEND
+
+**Tab 1. Schedule Construction Work** (10.2.3.1)
+- WBS-linked activities, dependencies (FS/SS/FF/SF + lag), CPM critical path, baselines, calendars (weather/holidays), Gantt
+- 3-week lookahead and last-planner weekly work plans (PPC %), resource-loaded view, P6/MS Project import/export, 4D BIM link, schedule risk run (P50/P80), constraints log
+
+**Tab 2. Obtain Resources** (10.2.3.2)
+- Requisitions for material/subcontract/equipment/labor, RFQ/tender, bid leveling and scoring, contractor prequalification
+- Award → PO/subcontract, expediting and delivery tracking, site inventory, labor onboarding (induction/certs), progress billing and retention
+
+**Tab 3. Construct New Assets** (10.2.3.3)
+- Daily site report (weather, manpower, equipment), progress by quantities and rules of credit, mobile offline capture
+- Photo/drone/LiDAR progress, installed quantity vs plan, productivity, subcontractor progress claims, as-built markups, inspection requests, assets created as `under_construction`
+
+**Tab 4. Augment Existing Assets** (10.2.3.4)
+- Upgrade/expansion/retrofit with MOC (management of change) workflow, engineering assessment, hazard review
+- Shutdown/turnaround planning, isolation plans, brownfield tie-ins, capitalise-vs-expense rule, asset record update, post-mod validation
+
+**Tab 5. Renew / Replace Assets** (10.2.3.5)
+- Renewal program from age/condition/risk (Screens 9 and 12), like-for-like vs upgrade, group replacements (HVAC, lighting), phased capex
+- Replacement project/WO, old asset removal link (Screen 13), history/warranty migration, asset lineage (replaced-by)
+
+### BACKEND: Tables
+```
+schedules (id, project_id, name, baseline_no, data_date, status) / schedule_activities (id, schedule_id, wbs_id, name, duration_days, early_start, early_finish, late_start, late_finish, float, percent_complete, calendar_id, is_critical)
+activity_relationships (id, predecessor_id, successor_id, type[FS/SS/FF/SF], lag_days)
+calendars (id, name, working_days_json, holidays_json) / schedule_baselines (id, schedule_id, baseline_no, snapshot_json, locked_on)
+weekly_work_plans (id, project_id, week_start, activity_id, crew_id, committed, completed, variance_reason_id) / ppc_metrics (id, project_id, week_start, ppc_pct)
+schedule_risk_runs (id, schedule_id, iterations, p50_date, p80_date, drivers_json)
+constraints_log (id, activity_id, constraint_type, owner_id, due_date, status)
+resource_requisitions (id, project_id, req_type[material/subcontract/equipment/labor], item_json, need_by, status, approval_request_id)
+tenders (id, requisition_id, type, issued_on, closes_on, status) / tender_bids (id, tender_id, vendor_id, amount, technical_score, status) / bid_evaluations (id, tender_id, criteria_json, result_json, recommended_vendor_id)
+subcontracts (id, project_id, vendor_id, scope, value, retention_pct, status) / subcontract_claims (id, subcontract_id, period, claimed, certified, retained, status)
+expediting_records (id, po_ref, item, promised_date, status, shipped_on, received_on)
+site_materials (id, project_id, item, qty_received, qty_issued, location)
+daily_reports (id, project_id, report_date, weather_json, manpower_json, equipment_json, notes, submitted_by)
+progress_measurements (id, activity_id, measure_date, qty_done, percent, rule_of_credit_id, evidence_doc_id)
+rules_of_credit (id, name, steps_json[e.g. fabricate 40/install 40/test 20])
+field_photos (id, ref_type, ref_id, file_url, geo_point, taken_at, ai_tags_json)
+as_built_markups (id, drawing_id, markup_url, marked_by, date)
+moc_requests (id, asset_id, change_description, reason, hazard_review_json, status, approval_request_id) / moc_reviews (id, moc_id, reviewer_role, decision, notes)
+shutdown_plans (id, site_id, name, start_date, end_date, scope_json, status) / isolation_plans (id, moc_id/wo_id, points_json, approved_by)
+renewal_programs (id, name, years, budget, status) / renewal_candidates (id, program_id, asset_id, trigger[age/condition/risk/regulatory], score, decision, replacement_project_id)
+asset_lineage (id, old_asset_id, new_asset_id, relation[replaced_by/upgraded_to/split_from], effective_date)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/schedule/schedules      POST .../schedules/:id/calculate    POST .../schedules/:id/baseline    POST .../schedules/import|export
+GET/POST/PUT /api/eam/schedule/activities     GET/POST .../activities/:id/relationships
+GET/POST /api/eam/schedule/lookahead          GET/POST/PUT .../weekly-plans      GET .../ppc
+POST /api/eam/schedule/:id/risk-run
+GET/POST/PUT /api/eam/sourcing/requisitions   GET/POST/PUT .../tenders    POST .../tenders/:id/evaluate    POST .../tenders/:id/award
+GET/POST/PUT /api/eam/sourcing/subcontracts   POST .../subcontracts/:id/claims    PUT .../claims/:id/certify
+GET/POST /api/eam/site/daily-reports          POST .../site/progress    GET/POST .../site/photos
+GET/POST/PUT /api/eam/moc                     POST .../moc/:id/approve
+GET/POST/PUT /api/eam/renewals/programs       GET/POST .../renewals/candidates    POST .../renewals/candidates/:id/convert-to-project
+```
+### Core Logic
+1. CPM forward/backward pass se float aur critical path, calendar-aware, baseline lock ke baad variance baseline ke against.
+2. Permit/constraint hold wali activity start nahi ho sakti jab tak clear na ho.
+3. Bid evaluation: technical aur commercial weighted, lowest compliant bid highlight, award par PO/subcontract Procurement mein, commitment `project_commitments` mein.
+4. Progress = quantity x rule-of-credit, activity %, rollup WBS %, EV ke liye Screen 5 ko.
+5. Subcontract claim certified = progress-based - retention - previous, payment AP ko.
+6. Construction asset create hote hi `under_construction`, cost CWIP mein, completion par Screen 8 commissioning se `active`.
+7. MOC approval ke bina brownfield WO release nahi hota; hazard review mandatory.
+8. Capitalise-vs-expense rule config (betterment vs repair, thresholds), decision logged.
+9. Renewal candidate convert hone par project bana, purane asset ka lineage aur Screen 13 decommission trigger.
+10. PPC = completed / committed weekly, low PPC par root-cause reason mandatory.
+11. `audit_log` har action pe.
+
+---
+
+## SCREEN 8: Asset Construction Management and Control (10.2.4) — 6 tabs
+
+### FRONTEND
+
+**Tab 1. Monitor Work Performance** (10.2.4.1)
+- Physical % vs plan, S-curves, earned schedule, productivity factors, cost-vs-progress, trend and forecast
+- Early-warning delays, resource utilization, weekly/monthly report generator, portfolio → package drill-down, anomaly alerts
+
+**Tab 2. Construction Quality Control** (10.2.4.2)
+- ITP (inspection and test plans) with hold/witness points, inspection requests and checklists, NCR and CAPA
+- Material test certificates, concrete/weld/NDT logs, calibration register, punch list, QA audits, rework cost, FPY
+
+**Tab 3. Work and Asset Records** (10.2.4.3)
+- As-built and handover dossier by system, equipment datasheets, manuals, warranties, certificates
+- Bulk asset creation into registry from construction data, validation vs asset-data requirements, QR tags, retention rules, digital twin sync, capitalization data
+
+**Tab 4. Safety, Security and Site Access** (10.2.4.4)
+- HSE plan, induction, PPE, permit-to-work (hot work, confined space, height, excavation, electrical), JSA, toolbox talks
+- Incident/near-miss, leading and lagging indicators (TRIR, LTIFR), crane/equipment inspections, worker access (gate/biometric, headcount on site), perimeter security, environmental monitoring (dust/noise)
+
+**Tab 5. Schedule and Perform Commissioning** (10.2.4.5)
+- Commissioning plan by system, mechanical completion checklists, FAT/SAT, functional and performance tests, punch categories A/B/C
+- Turnover certificates, operator training and spares handover, warranty start, ready-for-start-up approval, retention release, in-service date
+
+**Tab 6. Document Control, RFIs and Submittals (E)**
+- Document register and numbering, transmittals, RFI log (response SLA, impact), submittal register (shop drawings, materials approvals)
+- Meeting minutes and action tracker, correspondence, revision/superseded control, external party access, e-sign
+
+### BACKEND: Tables
+```
+progress_snapshots (id, project_id, as_of_date, planned_pct, actual_pct, spi, cpi, productivity_factor, forecast_finish)
+quality_plans (id, project_id, package_id, name, status) / itp_items (id, plan_id, activity, inspection_type[hold/witness/review], criteria, frequency)
+inspection_requests (id, itp_item_id, requested_by, location, requested_for, status) / inspection_results (id, request_id, result[pass/fail/conditional], inspector_id, evidence_json, date)
+ncrs (id, project_id, description, severity, root_cause, disposition[rework/accept/reject], cost_impact, status)
+test_records (id, project_id, test_type[concrete/weld/ndt/pressure/electrical], ref, result_json, cert_doc_id)
+calibration_instruments (id, instrument_no, type, last_cal, next_due, status)
+punch_items (id, project_id, system_id, description, category[A/B/C], owner_id, due_date, status, closed_on)
+hse_plans (id, project_id, version, content_json, approved_by)
+permits_to_work (id, ptw_type, wo_id/project_id, location, hazards_json, controls_json, isolation_ref, issued_to, issued_by, valid_from, valid_to, status)
+safety_observations (id, project_id, type[positive/unsafe_act/unsafe_condition], description, reported_by, action_id)
+toolbox_talks (id, project_id, topic, date, attendees_json)
+site_access_logs (id, project_id, worker_id, vendor_id, gate_id, in_at, out_at, induction_valid, ppe_ok)
+hse_metrics (id, project_id, period, man_hours, recordable, lost_time, trir, ltifr, near_misses)
+commissioning_plans (id, project_id, version, status) / commissioning_systems (id, plan_id, system_name, status, mech_complete_on, ready_for_startup_on, handed_over_on)
+commissioning_checklists (id, system_id, phase[pre/cold/hot], items_json, status) / commissioning_tests (id, system_id, test_type[fat/sat/functional/performance], result, measured_json, signed_by)
+turnover_packages (id, system_id, contents_json, status, accepted_by, accepted_on)
+completion_certificates (id, project_id, cert_type[mech_completion/practical_completion/final_acceptance], issued_on, signed_by, retention_release_amount)
+doc_register (id, project_id, doc_no, title, discipline, current_rev, status, owner_party)
+rfis (id, project_id, subject, question, raised_by, assigned_to, due_date, response, impact_cost, impact_days, status)
+submittals (id, project_id, spec_ref, type, submitted_by, reviewer_id, status[approved/approved_as_noted/revise/rejected], cycle_no)
+meeting_minutes (id, project_id, meeting_date, attendees_json, notes) / action_items (id, minutes_id, action, owner_id, due_date, status)
+```
+### BACKEND: APIs
+```
+GET /api/eam/construction/progress?project=X     GET .../progress/s-curve    POST .../reports/generate
+GET/POST/PUT /api/eam/quality/plans              GET/POST .../quality/inspections    PUT .../inspections/:id/result
+GET/POST/PUT /api/eam/quality/ncrs               GET/POST .../quality/tests    GET/POST/PUT .../quality/punch
+GET/POST /api/eam/records/handover-dossiers      POST .../records/assets/bulk-create    POST .../records/validate
+GET/POST/PUT /api/eam/hse/ptw                    PUT .../hse/ptw/:id/issue|close    GET/POST .../hse/observations    GET .../hse/metrics
+GET/POST/PUT /api/eam/commissioning/plans        PUT .../commissioning/systems/:id/status    POST .../commissioning/certificates
+GET/POST /api/eam/docs/register    GET/POST/PUT .../docs/rfis    GET/POST/PUT .../docs/submittals    GET/POST .../docs/minutes
+```
+### Core Logic
+1. Hold point par inspection pass hue bina next activity release nahi hoti (schedule constraint).
+2. NCR disposition rework par WO, cost impact project cost mein, repeated NCR par CAPA mandatory.
+3. PTW: hazards aur controls approve hue bina issue nahi; validity khatam par auto-close, isolation point verify ke baad hi.
+4. Site gate: induction aur PPE aur certificate valid ho tabhi entry, headcount on site real-time.
+5. TRIR = recordables x 200,000 / man-hours (base config), thresholds par alert.
+6. Commissioning: system-wise checklist complete + A-category punch zero ho tab "ready for start-up"; certificate par asset status `active`, `in_service_date` set, depreciation start, warranty start.
+7. Handover dossier required attributes asset-data requirements se validate; missing par turnover block.
+8. RFI response SLA breach par escalation, impact cost/days change order (Screen 5) ko feed.
+9. Retention release tabhi jab final acceptance aur defect liability period clear.
+10. `audit_log` har action pe, doc revisions immutable.
+
+---
+
+# PART 3: MAINTAIN ASSETS (10.3)
+
+## SCREEN 9: Maintenance Planning (10.3.1) — 8 tabs
+
+### FRONTEND
+
+**Tab 1. Develop Maintenance Strategies** (10.3.1.1)
+- Strategy per asset class/criticality: run-to-failure, time-based, usage-based, condition-based, predictive, RBI, TPM
+- RCM workbench: functions → functional failures → failure modes (FMEA) → effects/consequences → task selection; strategy library with cost-benefit, approval
+
+**Tab 2. Analyze Assets and Predict Requirements** (10.3.1.2)
+- Asset Health Index (age, condition, failures, inspections), bad actors, MTBF/Weibull, Pareto
+- Remaining useful life, IoT anomaly detection (vibration, temperature, oil, thermography), model registry, recommended WOs with confidence, false-positive feedback
+
+**Tab 3. Specify Maintenance Policies** (10.3.1.3)
+- Policy library: inspection frequencies, statutory inspections (boiler, lift, pressure vessel, fire, electrical), OEM/warranty conditions, shutdown, spares, outsourcing rules
+- Applicability by class/site/criticality, versioned approvals, exceptions/waivers
+
+**Tab 4. Integrate PM into Operations Schedule** (10.3.1.4)
+- Ops/production calendar, maintenance windows, PM rules (calendar/meter/condition, floating vs fixed), long-range PM forecast
+- Load levelling, production collision detection, shutdown calendar, operator-led maintenance, opportunistic maintenance, occupant notices
+
+**Tab 5. Identify Work Management Tasks and Priorities** (10.3.1.5)
+- Job-plan library (steps, tools, safety, duration, craft, parts), priority matrix (criticality x urgency x safety/regulatory)
+- Work-request intake (portal, QR, email, IoT), triage and approval, backlog aging, ready-to-schedule criteria, SLA by priority
+
+**Tab 6. Conduct Resource Planning** (10.3.1.6)
+- Craft capacity (shifts, skills, certs from HR/T&A), contractor capacity, tools/equipment, spares forecast and min/max
+- Maintenance budget (plan vs forecast vs actual), skill-gap, make-vs-buy, critical spares, rotables
+
+**Tab 7. Create Asset Work Plans** (10.3.1.7)
+- Annual/multi-year work plan per asset or group: PM schedule, inspections, overhauls
+- Job-plan assignment, plan vs capacity, cost forecast, approval, publish (auto-generates scheduled WOs), AM plan per asset group (ISO 55001)
+
+**Tab 8. Asset Criticality and Risk Assessment (E)**
+- Criticality matrix (safety, environment, production, cost, regulatory, reputation) with config weights, likelihood x consequence, heat map
+- Risk-based strategy mapping, mitigation actions, periodic reassessment, link to renewal and insurance
+
+### BACKEND: Tables
+```
+maintenance_strategies (id, name, type[rtf/time/usage/cbm/predictive/rbi/tpm], applies_to_json, cost_benefit_json, version, status)
+strategy_assignments (id, strategy_id, asset_class_id/asset_id, criticality_band, effective_from)
+rcm_studies (id, asset_class_id/asset_id, facilitator_id, status, date) / rcm_functions (id, study_id, function, performance_standard)
+fmea_lines (id, function_id, functional_failure, failure_mode, effect, severity, occurrence, detection, rpn, consequence, task_id)
+rcm_tasks (id, fmea_line_id, task_type[cbm/time/find_failure/redesign/rtf], interval, interval_basis, job_plan_id)
+asset_health_models (id, name, factors_json, weights_json, version) / asset_health_scores (id, asset_id, model_id, score, band, computed_at)
+reliability_metrics (id, asset_id/class_id, period, mtbf, mttr, availability, failure_count, weibull_json)
+ml_models (id, name, model_type[rul/anomaly/classification], version, metrics_json, status) / rul_predictions (id, asset_id, model_id, rul_days, confidence, predicted_at)
+anomaly_alerts (id, asset_id, signal, severity, detected_at, status, suggested_wo_json) / prediction_feedback (id, alert_id, outcome[true_positive/false_positive], notes)
+maintenance_policies (id, name, scope_json, rule_json, source[internal/statutory/oem/warranty], version, effective_from, status)
+statutory_inspections (id, asset_class_id, authority, frequency, certificate_required, country_id)
+policy_exceptions (id, policy_id, asset_id, reason, valid_until, approval_request_id)
+pm_schedules (id, asset_id, job_plan_id, trigger_type[calendar/meter/condition], interval, interval_uom, scheduling_mode[fixed/floating], last_done, next_due, lead_days, status)
+pm_forecast (id, horizon_months, generated_on, load_by_period_json)
+maintenance_windows (id, site_id/asset_id, start_at, end_at, window_type, ops_approved_by)
+ops_calendars (id, site_id, schedule_json, source[manual/mes/erp])
+job_plans (id, name, asset_class_id, craft, est_hours, steps_json, tools_json, safety_json, version) / job_plan_parts (id, job_plan_id, item_id, qty)
+work_requests (id, source[portal/qr/email/iot/phone], asset_id/space_id, description, requester_id, priority, status, triage_by, wo_id)
+priority_matrix (id, criticality_band, urgency, safety_flag, regulatory_flag, resulting_priority, sla_id)
+backlog_snapshots (id, snapshot_date, site_id, hours, count, avg_age_days)
+craft_capacity (id, craft, site_id, period, available_hours, source[hr/contractor])
+spare_policies (id, item_id, site_id, min_qty, max_qty, reorder_point, criticality, rotable_flag)
+maintenance_budgets (id, site_id, fiscal_year, category, planned, forecast, actual, currency)
+asset_work_plans (id, scope_type, scope_id, plan_year, version, status, approval_request_id) / work_plan_items (id, plan_id, asset_id, job_plan_id, planned_date, est_cost, est_hours)
+overhaul_plans (id, asset_id, overhaul_type, planned_start, planned_end, est_cost, shutdown_plan_id)
+am_plans (id, asset_group, objectives, lifecycle_activities_json, risk_refs_json, version, status)
+criticality_models (id, name, dimensions_json, weights_json, bands_json, version) / criticality_scores (id, asset_id, model_id, scores_json, total, band, assessed_on)
+asset_risks (id, asset_id, failure_mode_id, likelihood, consequence, risk_score, mitigation, residual_score, review_date)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/maint/strategies          POST .../strategies/:id/assign     GET/POST/PUT .../rcm/studies    GET/POST .../rcm/studies/:id/fmea
+GET /api/eam/maint/health-scores?site=X         POST .../health-scores/recompute   GET .../reliability/metrics    GET .../reliability/bad-actors
+GET/POST /api/eam/maint/predictions             POST .../predictions/:id/feedback  POST .../predictions/:id/create-wo
+GET/POST/PUT /api/eam/maint/policies            GET/POST/PUT .../policies/statutory
+GET/POST/PUT /api/eam/maint/pm-schedules        GET .../pm-forecast    GET/POST/PUT .../maintenance-windows
+GET/POST/PUT /api/eam/maint/job-plans           GET/POST/PUT .../work-requests    POST .../work-requests/:id/triage    GET .../backlog
+GET/POST /api/eam/maint/capacity                GET/POST/PUT .../budgets    GET/POST/PUT .../spare-policies
+GET/POST/PUT /api/eam/maint/work-plans          POST .../work-plans/:id/publish     GET/POST/PUT .../am-plans
+GET/POST/PUT /api/eam/risk/criticality-models   POST .../risk/criticality/score    GET .../risk/heatmap    GET/POST/PUT .../risk/asset-risks
+```
+### Core Logic
+1. FMEA RPN = severity x occurrence x detection, threshold se upar wali failure modes ke liye task mandatory; RCM task approve hone par `pm_schedules`/CBM trigger automatically banta hai (analysis kitaab mein na rahe).
+2. Criticality band se strategy default assign hoti hai, high-critical = CBM/predictive, low = run-to-failure (config).
+3. Health score weighted factors (age, condition, failure rate, inspection result), band change par alert aur renewal candidate (Screen 7 tab 5).
+4. Prediction confidence threshold ke upar WO auto-draft, planner approve karta hai; false-positive feedback model retraining ke liye.
+5. PM trigger: calendar, meter reading ya condition threshold; floating mode mein next due = last completion + interval, fixed mein original cycle.
+6. Window/production collision par PM auto-reschedule suggestion, ops approval.
+7. Priority = matrix lookup (criticality, urgency, safety/regulatory), SLA auto-attach.
+8. Work plan publish par scheduled WOs generate (Screen 10), capacity se zyada load par warning.
+9. Statutory inspection due date miss hona non-compliance incident banata hai aur Screen 15 compliance tab se link.
+10. Policy change par affected PM schedules ka impact preview.
+11. `audit_log` har action pe.
+
+---
+
+## SCREEN 10: Maintenance Management (10.3.2) — 7 tabs
+
+### FRONTEND
+
+**Tab 1. Schedule Maintenance Work** (10.3.2.1)
+- Scheduler board (drag-drop by craft/day), auto-schedule (priority, skills, parts, permits, access), dispatch to mobile, route optimization
+- Shutdown scheduling, rescheduling with reason, emergency insertion, SLA clocks, schedule-compliance %
+
+**Tab 2. Obtain Required Resources** (10.3.2.2)
+- WO material reservation, auto-PR on shortage, kitting/staging, tool-crib checkout, contractor call-offs
+- Storeroom: min/max, ABC, bin/lot/serial, cycle count, obsolescence, rotables/repairables, vendor-managed inventory
+
+**Tab 3. Undertake Quality Control** (10.3.2.3)
+- Post-maintenance verification, acceptance criteria, as-found/as-left readings, calibration management, supervisor sign-off
+- Rework (repeat WO within X days), contractor QA, regulatory test records, quality KPIs
+
+**Tab 4. Update Work and Asset Records** (10.3.2.4)
+- WO close-out: actual labor/material/downtime, failure codes (problem/cause/remedy, ISO 14224-aligned library), meter readings, condition update
+- Cost roll-up to asset/cost centre → Ledger, warranty-claim trigger, data-quality rules (mandatory fields), mobile offline sync
+
+**Tab 5. Manage Maintenance Work Safety** (10.3.2.5)
+- Permit-to-work, LOTO (procedures, isolation points, lock register), JSA/JHA per job, PPE, confined-space/hot-work
+- Contractor competency check, stop-work authority, safe-to-start verification, safety instructions inside job plan
+
+**Tab 6. Define Maintenance Performance Targets** (10.3.2.6)
+- KPI library (PM compliance, schedule compliance, backlog weeks, wrench time, MTBF, MTTR, availability, OEE, planned vs unplanned %, first-time fix, maintenance cost % of asset value)
+- Targets per site/class/contractor, benchmarks, RAG thresholds, SLA/contract targets and penalty/incentive rules, target-setting workflow
+
+**Tab 7. Monitor Performance vs Targets / Contracts** (10.3.2.7)
+- Dashboards and trends with drill-down site → asset → WO, contractor SLA compliance and penalty calculation
+- Invoice validation vs completed work, budget vs actual, miss root-cause and action plans, QBR packs, exception alerts
+
+### BACKEND: Tables
+```
+schedule_boards (id, site_id, name, view_config_json) / wo_schedule_slots (id, wo_id, craft_id, crew_id, start_at, end_at, status, reschedule_reason_id)
+dispatch_events (id, wo_id, technician_id, dispatched_at, accepted_at, arrived_at, completed_at)
+crews (id, name, site_id, shift_id) / crew_members (id, crew_id, employee_id, craft, skills_json)
+storerooms (id, site_id, name, type) / inventory_items (id, item_no, description, uom, abc_class, criticality, rotable, lot_tracked, serial_tracked, obsolete_flag)
+stock_balances (id, storeroom_id, item_id, bin, lot_no, qty_on_hand, qty_reserved, avg_cost)
+stock_transactions (id, storeroom_id, item_id, txn_type[receipt/issue/return/transfer/adjust/count], qty, wo_id, cost, txn_at)
+reservations (id, wo_id, item_id, qty, status) / kits (id, wo_id, items_json, staged_at)
+tool_crib (id, tool_id, issued_to, issued_at, returned_at, condition)
+service_orders (id, wo_id, vendor_id, scope, amount, status, po_ref)
+calibration_records (id, instrument_id, done_on, result, cert_doc_id, next_due)
+maint_inspection_results (id, wo_id, criteria_json, as_found_json, as_left_json, accepted_by, accepted_on)
+rework_flags (id, wo_id, original_wo_id, days_since, reason)
+failure_code_sets (id, name, standard[iso14224/custom]) / failure_codes (id, set_id, code_type[problem/cause/remedy], code, label, parent_id)
+wo_closeouts (id, wo_id, labor_json, materials_json, downtime_min, failure_problem_id, failure_cause_id, failure_remedy_id, condition_after, closed_by, closed_on)
+wo_cost_summary (id, wo_id, labor_cost, material_cost, service_cost, total, posted_to_ledger)
+warranty_claims (id, asset_id, wo_id, vendor_id, amount, status, filed_on, settled_on)
+lockout_procedures (id, asset_id, steps_json, energy_sources_json, version) / isolation_points (id, procedure_id, point_ref, type, location)
+lock_register (id, wo_id, isolation_point_id, lock_no, applied_by, applied_at, removed_by, removed_at)
+jsas (id, wo_id, hazards_json, controls_json, approved_by)
+kpi_definitions (id, name, formula, category, uom, direction) / maint_kpi_targets (id, kpi_id, scope_type, scope_id, target, period, threshold_json) / maint_kpi_values (id, kpi_id, scope_type, scope_id, period, value)
+kpi_benchmarks (id, kpi_id, source, industry, value, as_of_date)
+sla_definitions (id, contract_id, metric, target, measurement_rule, penalty_rule_json, incentive_rule_json) / sla_measurements (id, sla_id, period, actual, met, penalty_amount)
+contractor_invoice_checks (id, invoice_ref, contract_id, claimed, validated_against_wos, variance, status)
+performance_reviews (id, scope_type, scope_id, period, findings, actions_json, held_on)
+```
+### BACKEND: APIs
+```
+GET/POST /api/eam/wo/schedule-board        POST .../wo/:id/schedule|reschedule    POST .../wo/auto-schedule    POST .../wo/:id/dispatch    PUT .../dispatch/:id/accept|arrive|complete
+GET /api/eam/wo/:id/availability           POST .../wo/:id/reserve-materials      POST .../wo/:id/request-parts
+GET/POST/PUT /api/eam/inventory/items      GET .../inventory/balances    POST .../inventory/transactions    POST .../inventory/cycle-count    GET .../inventory/reorder-suggestions
+GET/POST /api/eam/quality/maint-inspections   GET/POST/PUT .../calibration/instruments    GET .../quality/rework
+PUT /api/eam/wo/:id/close                  GET/POST/PUT .../failure-codes    GET/POST .../warranty-claims
+GET/POST/PUT /api/eam/safety/lockout       GET/POST .../safety/lock-register    GET/POST .../safety/jsa
+GET/POST/PUT /api/eam/kpi/definitions      GET/POST/PUT .../kpi/targets    GET .../kpi/values    GET/POST .../kpi/benchmarks
+GET/POST/PUT /api/eam/sla/definitions      GET .../sla/measurements    POST .../sla/penalties/calc    POST .../contractors/invoices/validate
+GET/POST /api/eam/maint/performance-reviews
+```
+### Core Logic
+1. Auto-schedule constraints: priority, craft skills/certs, parts availability, permits, access windows, labor from HR roster; conflicts flag.
+2. WO tab tak "ready to schedule" nahi jab tak parts reserved, permit ready aur job plan approved.
+3. Shortage par auto-PR, lead time ke hisaab se WO reschedule suggestion.
+4. Inventory: reorder point = demand over lead time + safety stock (spare policy), ABC aur cycle count frequency class se, valuation method config.
+5. Close-out par failure codes (problem/cause/remedy) mandatory for corrective WOs (config), nahi to close block; cost Ledger ko post.
+6. Same asset par X din ke andar repeat corrective WO rework flag.
+7. LOTO: lock apply hue bina PTW `safe_to_start` nahi hota, saari locks remove hue bina WO close nahi.
+8. KPI auto-calc WO aur downtime data se: PM compliance = PM completed on time / PM due, MTTR, MTBF, wrench time (labor on-tool / available).
+9. SLA penalty = breach days/count x rate with cap, contractor invoice mein auto-deduct suggestion.
+10. Invoice validation: claimed vs closed WOs aur contract rates, variance par hold.
+11. `audit_log` har action pe.
+
+---
+
+## SCREEN 11: Perform Asset Maintenance (10.3.3) — 6 tabs
+
+### FRONTEND
+
+**Tab 1. Perform Preventative Maintenance** (10.3.3.1)
+- PM WOs auto-generated (calendar/meter/condition), checklist execution on mobile (offline, QR scan), measurements, parts consumption
+- PM compliance, deferrals with approval, PM optimization (interval adjust from history), lubrication/inspection routes
+
+**Tab 2. Perform Routine Asset Maintenance** (10.3.3.2)
+- Recurring routine tasks: cleaning, grounds, pest control, janitorial, consumables (lamp replacement), operator rounds, meter-reading rounds
+- Soft-service quality inspection, SLA-based contracts, batch small jobs
+
+**Tab 3. Perform Corrective Maintenance and Repairs** (10.3.3.3)
+- Corrective WOs from failures/defects/inspection findings, troubleshooting guides and past-fix suggestions (AI assist)
+- Repair planning, vendor/OEM warranty repair, RMA/depot repair, repair-vs-replace decision, temporary-fix tagging with follow-up
+
+**Tab 4. Identify Unplanned Maintenance Requirements** (10.3.3.4)
+- Detection channels: IoT/SCADA/BMS alarms, operator reports, inspection findings, tenant requests, near-miss, drone/visual AI inspection, thermography
+- Triage (severity/safety), de-duplication, auto-classification, auto-create emergency WO, impact assessment
+
+**Tab 5. Perform Unplanned Maintenance and Repairs** (10.3.3.5)
+- Breakdown response: on-call roster (HR link), nearest qualified technician dispatch, SLA timers (response/arrival/resolution)
+- Fast-track permit, emergency parts (stock/vendor/rental), escalation chain, major-incident war-room, downtime log, return-to-service verification, stakeholder comms, insurance claim trigger
+
+**Tab 6. Failure Reporting and RCA (E)**
+- Failure event database, RCA methods (5-why, fishbone, fault tree), action tracking, recurring-failure detection
+- Feeds FMEA updates (Screen 9 tab 1), bad-actor programme, vendor failure attribution, lessons learned
+
+### BACKEND: Tables
+```
+inspection_routes (id, name, site_id, frequency, type[operator_round/lube/meter/safety]) / route_stops (id, route_id, asset_id, sequence, checklist_id)
+route_runs (id, route_id, run_by, started_at, completed_at, status) / route_results (id, run_id, stop_id, readings_json, findings, photo_ids)
+checklists (id, name, asset_class_id) / checklist_items (id, checklist_id, item, type, limits_json) / checklist_results (id, wo_id, item_id, result, value, comment)
+pm_deferrals (id, wo_id, reason_code_id, new_date, approved_by, approval_request_id)
+service_requests (id, requester_id, space_id/asset_id, category, description, priority, status, wo_id, satisfaction_score)
+troubleshooting_guides (id, asset_class_id, symptom, probable_causes_json, steps_json, version)
+repair_decisions (id, wo_id, repair_cost, replace_cost, residual_value, recommendation, decided_by)
+rma_orders (id, asset_id, vendor_id, rma_no, shipped_on, received_on, status, cost, warranty_covered)
+temporary_fixes (id, wo_id, description, permanent_wo_id, expiry_date)
+incoming_signals (id, source[iot/scada/bms/operator/inspection/tenant/ai_vision], asset_id, signal_type, severity, raw_json, received_at, status)
+triage_rules (id, condition_json, action[create_wo/escalate/ignore/merge], priority, effective_from)
+oncall_rosters (id, craft, site_id, name) / oncall_shifts (id, roster_id, employee_id, start_at, end_at, hr_ref)
+emergency_dispatches (id, wo_id, technician_id, dispatched_at, arrived_at, resolved_at, response_sla_met, resolution_sla_met)
+sla_timers (id, wo_id, sla_id, started_at, paused_at, due_at, breached)
+major_incidents (id, wo_id, title, severity, started_at, resolved_at, commander_id, comms_log_json, pir_doc_id)
+failure_events (id, asset_id, wo_id, failure_mode_id, failure_code_ids_json, started_at, restored_at, downtime_min, consequence)
+rca_cases (id, failure_event_id, method, team_json, root_causes_json, status) / rca_actions (id, rca_id, action, owner_id, due_date, status, capa_id)
+bad_actor_list (id, asset_id/class_id, period, failure_count, downtime_min, cost, rank)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/routes      POST .../routes/:id/run    PUT .../route-runs/:id/result
+GET/POST /api/eam/wo/pm           POST .../wo/:id/defer     GET .../pm/compliance
+GET/POST/PUT /api/eam/service-requests      GET/POST/PUT .../troubleshooting     POST .../wo/:id/repair-decision    GET/POST/PUT .../rma
+POST /api/eam/signals/ingest      GET/POST/PUT .../signals/triage-rules    POST .../signals/:id/convert-to-wo
+GET/POST/PUT /api/eam/oncall/rosters    POST .../emergency/dispatch    GET .../emergency/sla    POST .../major-incidents    PUT .../major-incidents/:id/resolve
+GET/POST /api/eam/reliability/failure-events    GET/POST/PUT .../rca    GET .../reliability/bad-actors
+```
+### Core Logic
+1. PM WO due date se lead days pehle generate, completion par `last_done` update aur next due re-calc (fixed/floating).
+2. Checklist limits ke bahar reading par auto corrective WO.
+3. Signals: dedupe (same asset, same signal, window), triage rule se auto emergency WO, safety-critical par immediate escalation.
+4. Emergency dispatch: nearest qualified (skill, cert, shift, GPS) technician, on-call roster HR ke leave/T&A se sync.
+5. SLA timers pause (waiting for parts/access, config reasons) aur breach par escalation chain.
+6. Repair-vs-replace: repair cost >= threshold% of replacement ya remaining life low ho to replace recommendation, renewal candidate Screen 7 tab 5.
+7. Warranty-covered repair par claim auto-draft Screen 10 tab 4.
+8. Failure event se MTBF/MTTR update, repeat failure par RCA mandatory (config threshold).
+9. RCA action CAPA Engine mein, closure par FMEA update suggestion.
+10. Return-to-service verification ke baad hi asset status `active`.
+11. `audit_log` har action pe.
+
+---
+
+# PART 4: MANAGE ASSET END-OF-LIFE (10.4)
+
+## SCREEN 12: Exit Strategy and Retirement Obligations (10.4.1) — 3 tabs
+
+### FRONTEND
+
+**Tab 1. Monitor Useful Life of Assets** (10.4.1.1)
+- Accounting vs technical vs economic life, remaining life, age profile (pyramid by class), health/condition view
+- Obsolescence tracker (OEM end-of-support, spares availability), regulatory phase-outs, fully-depreciated-but-in-use, life-extension decisions, end-of-life alerts
+
+**Tab 2. Cost vs Benefit Analysis for Replacement** (10.4.1.2)
+- LCC/TCO model with optimal replacement age (rising maintenance cost vs capital annuity), NPV of replace vs repair vs extend
+- Residual/salvage value, downtime and risk cost, energy/efficiency gain, tax/depreciation effect, carbon, financing (lease vs buy), sensitivity, ranked candidates, decision workflow
+
+**Tab 3. Asset Retirement Obligations (E)**
+- Obligation register: site restoration, asbestos, decommissioning, lease restoration, conditional AROs
+- Cash-flow estimate, discount rate, initial recognition (liability + capitalized cost), accretion, revisions, settlement, annual review, rollforward and disclosures, funding (trust/surety)
+
+### BACKEND: Tables
+```
+asset_life_profiles (id, asset_id, accounting_life_months, technical_life_months, economic_life_months, remaining_life_months, basis, as_of_date)
+life_extension_decisions (id, asset_id, extension_months, justification, engineer_id, approval_request_id, decided_on)
+obsolescence_records (id, asset_id/class_id, type[oem_eos/spares/regulatory/technology], date, severity, mitigation)
+lifecycle_alerts (id, asset_id, alert_type, due_date, status)
+replacement_analyses (id, asset_id, options_json, discount_rate, recommended_option, npv_json, optimal_age, version, status)
+lcc_models (id, asset_class_id, cost_curves_json, assumptions_json) / lcc_cash_flows (id, analysis_id, option, period, cost_type, amount)
+replacement_rankings (id, program_id, asset_id, score, rank, decision)
+aro_obligations (id, asset_id/site_id, obligation_type, legal_basis[legal/contractual/constructive], standard[ias37/asc410], status, recognized_on)
+aro_estimates (id, obligation_id, version, expected_cash_flows_json, settlement_date, discount_rate, probability_json, fair_value)
+aro_layers (id, obligation_id, layer_date, amount, rate, accretion_to_date)
+aro_accretion_runs (id, obligation_id, period, opening, accretion, revision, settled, closing, journal_ref)
+aro_settlements (id, obligation_id, settled_on, actual_cost, variance, journal_ref)
+aro_funding (id, obligation_id, funding_type[trust/surety/bond/escrow], amount, provider, expiry)
+```
+### BACKEND: APIs
+```
+GET /api/eam/lifecycle/profiles?class=X   POST .../lifecycle/extension    GET/POST .../lifecycle/obsolescence    GET .../lifecycle/age-profile
+GET/POST/PUT /api/eam/replacement/analyses   POST .../analyses/:id/compute    GET .../replacement/rankings    POST .../analyses/:id/decide
+GET/POST/PUT /api/eam/aro/obligations     POST .../aro/:id/estimate    POST .../aro/accretion/run    POST .../aro/:id/settle    GET .../aro/rollforward    GET .../aro/disclosure
+```
+### Core Logic
+1. Remaining life = min(technical, economic, regulatory) alag-alag, accounting life depreciation se.
+2. End-of-life alert X months pehle, config per class.
+3. Life extension ke liye engineer justification aur approval, extension se depreciation ka prospective change (Ledger ko event).
+4. Optimal replacement age = min of equivalent annual cost over time, maintenance cost rise aur capital cost se.
+5. Decision (replace/repair/extend) approve hone par Capital Plan (Screen 5) aur Renewal (Screen 7 tab 5) ko feed.
+6. ARO initial = PV of expected cash flows at credit-adjusted rate, capitalized asset retirement cost, monthly accretion; estimate revision naya layer, standard (IAS 37/IFRIC 1 vs ASC 410-20) config se.
+7. Annual ARO review (Q4 default) reminder, material change par off-cycle revision.
+8. Settlement par actual vs liability ka gain/loss.
+9. `audit_log` har action pe.
+
+---
+
+## SCREEN 13: End-of-Life Operations (10.4.2 – 10.4.9) — 8 tabs
+
+### FRONTEND
+
+**Tab 1. Decommission Productive Assets** (10.4.2)
+- Decommission request and approval (ops/finance/safety/environment), plan: de-energize, isolate, drain, purge, clean, decontaminate
+- WBS/WO, LOTO, permits, IT data-wipe certificate, de-registration (licences, regulatory), stranded-cost analysis, asset status → decommissioned, depreciation stop
+
+**Tab 2. Perform Sale or Trade** (10.4.3)
+- Disposal channel (redeploy first, sale, auction, trade-in, donation, scrap, buy-back), valuation (appraisal vs book), online listing/auction
+- Bids, buyer KYC/sanction screening, contract, invoice, title transfer, gain/loss, tax, trade-in credit against new PO, approvals by value
+
+**Tab 3. Manage Take-Back Centers** (10.4.4)
+- Collection points, receiving, inspection/grading (reuse/refurbish/recycle/scrap), serialized tracking, data wipe
+- EPR compliance (e-waste, batteries, packaging), refurbishment workflow, resale/recycle routing, customer credit, capacity scheduling, regulator volume reports
+
+**Tab 4. Dismantle Assets** (10.4.5)
+- Dismantling plan (sequence, method, SWMS), BOM breakdown, hazard survey (asbestos, PCB, refrigerant)
+- Crew/contractor, component recovery tagging (reuse/resell/recycle/hazardous), weighing logs, photo evidence, cost vs recovery, site hand-back
+
+**Tab 5. Track Parts** (10.4.6)
+- Recovered-parts inventory (serial/lot, condition grade, provenance asset), genealogy (asset → components → disposition)
+- Cannibalization approval, quarantine/hold, valuation, bin location, aging, QR/RFID, recall tracking
+
+**Tab 6. Recycle Parts** (10.4.7)
+- Certified recycler network, material streams (metals, plastics, glass, batteries, e-waste), pickup, weighing
+- Recovery %, certificates of recycling/destruction, scrap revenue, circularity KPIs, ESG reporting, downstream audit
+
+**Tab 7. Ship Hazardous Material** (10.4.8)
+- Classification (UN no., class, packing group), packaging/labelling, DG declaration/shipping papers, carrier qualification
+- Mode rules (road/air/sea/rail), transboundary movement consent and tracking, hazardous-waste manifests (e-manifest style, country config), driver/shipper training check, receipt confirmation, spill reporting
+
+**Tab 8. Provide Government Reporting** (10.4.9)
+- Regulatory calendar (waste inventory/biennial, emissions, EPR returns, disposal tax, decommissioning notifications, customs, ARO filings)
+- Country/authority templates, data auto-collection, preparer → reviewer → approver, submission log and acknowledgements, amendments, inspection pack, penalties
+
+### BACKEND: Tables
+```
+decommission_orders (id, asset_id, reason_code_id, planned_start, planned_end, status, approval_request_id, project_id)
+decommission_tasks (id, order_id, task_type[deenergize/isolate/drain/purge/clean/decontaminate/disconnect/wipe], owner_id, status, wo_id, completed_on)
+decontamination_records (id, order_id, method, result_json, verified_by) / data_wipe_certificates (id, asset_id, method, wiped_on, cert_doc_id)
+deregistrations (id, asset_id, registry_type, authority, submitted_on, confirmed_on)
+disposal_cases (id, asset_id, channel[redeploy/sale/auction/trade_in/donation/scrap/buyback], book_value, market_value, status, approval_request_id)
+valuations (id, case_id, method, value, valuer, date)
+disposal_offers (id, case_id, buyer_id, amount, currency, status) / buyers (id, name, kyc_status, sanction_check_json)
+disposal_transactions (id, case_id, buyer_id, price, tax, gain_loss, invoice_ref, title_transferred_on, journal_ref)
+trade_in_credits (id, case_id, po_ref, credit_amount)
+takeback_centers (id, name, site_id, capacity_per_day, programs_json, status) / takeback_receipts (id, center_id, source_type, serial_no, received_on, condition_grade, routing[reuse/refurb/recycle/scrap])
+refurb_jobs (id, receipt_id, work_json, cost, outcome, resale_value) / epr_obligations (id, country_id, stream, target_pct, period, collected_qty, status)
+dismantle_plans (id, asset_id, method, sequence_json, swms_doc_id, status) / dismantle_tasks (id, plan_id, step, crew_json, status)
+hazard_surveys (id, asset_id, hazards_json, surveyor, date, abatement_required)
+recovered_components (id, source_asset_id, component_desc, serial_no, condition_grade, disposition[reuse/resell/recycle/hazardous/scrap], weight_kg, location, status)
+parts_genealogy (id, component_id, from_asset_id, to_asset_id/stock_id/batch_id, event, event_at)
+cannibalization_requests (id, component_id, target_asset_id, approved_by, valuation, status)
+recyclers (id, vendor_id, certifications_json, streams_json, status) / recycling_batches (id, recycler_id, stream, weight_kg, shipped_on, recovered_pct, revenue, cert_doc_id)
+circularity_metrics (id, period, site_id, diverted_pct, reuse_pct, recycle_pct, landfill_pct)
+dg_shipments (id, origin_site_id, destination_ref, mode[road/air/sea/rail], carrier_id, ship_date, status, transboundary_flag) / dg_shipment_lines (id, shipment_id, un_number, class, packing_group, qty, packaging_json, waste_profile_id)
+un_classifications (id, un_number, proper_name, class, packing_group, special_provisions_json, regime[adr/iata/imdg/cfr])
+shipping_documents (id, shipment_id, doc_type[dg_declaration/manifest/consent/permit], file_url, signed_by, signed_on)
+transboundary_movements (id, shipment_id, export_country, import_country, notification_ref, consent_status, tracking_json)
+shipment_events (id, shipment_id, event, location, event_at) / carriers (id, vendor_id, dg_approved, modes_json, insurance_expiry)
+reg_calendar (id, country_id, authority, report_name, frequency, due_rule_json, owner_id)
+reg_report_templates (id, authority, country_id, schema_json, version) / reg_reports (id, calendar_id, period, data_json, status[draft/review/approved/submitted], prepared_by, reviewed_by, approved_by)
+reg_submissions (id, report_id, submitted_on, channel[api/portal/upload], reference_no, status) / reg_acknowledgements (id, submission_id, received_on, doc_id)
+penalties (id, authority, reason, amount, currency, issued_on, status, capa_id)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/eol/decommission       POST .../decommission/:id/submit    PUT .../decommission/tasks/:tid    POST .../decommission/:id/complete    POST .../assets/:id/wipe-certificate
+GET/POST/PUT /api/eam/eol/disposal           POST .../disposal/:id/valuation    GET/POST .../disposal/:id/offers    POST .../disposal/:id/award    POST .../disposal/:id/close
+GET/POST/PUT /api/eam/eol/takeback/centers   POST .../takeback/receipts    PUT .../receipts/:id/grade    GET/POST .../takeback/refurb    GET .../takeback/epr
+GET/POST/PUT /api/eam/eol/dismantle          GET/POST .../dismantle/:id/components    GET/POST .../hazard-surveys
+GET/POST/PUT /api/eam/parts/recovered        GET .../parts/:id/genealogy    POST .../parts/cannibalize
+GET/POST/PUT /api/eam/recycling/recyclers    GET/POST .../recycling/batches    GET .../recycling/circularity
+GET/POST/PUT /api/eam/dg/shipments           POST .../shipments/:id/classify    POST .../shipments/:id/documents    GET .../shipments/:id/track    GET .../dg/un-classifications
+GET/POST/PUT /api/eam/reg/calendar           POST .../reg/reports/generate    PUT .../reg/reports/:id/approve    POST .../reg/reports/:id/submit    GET .../reg/submissions
+```
+### Core Logic
+1. Decommission checklist (isolation, drain, purge, decontamination, data wipe, de-registration) complete hue bina status `decommissioned` nahi; complete par depreciation stop aur Ledger event.
+2. Disposal pehle internal redeploy match (same class, location, condition) check, nahi mila to external channel; value threshold se approval.
+3. Gain/loss = proceeds - net book value - costs, tax config se, Ledger journal; buyer sanction/KYC fail par block.
+4. Take-back receipt grading routing decide karti hai, refurb cost vs resale value par scrap/recycle.
+5. Dismantle: hazard survey positive (asbestos etc.) ho to abatement contractor aur permits mandatory, tabhi work release.
+6. Recovered component ka genealogy permanent; cannibalization approval, stock mein valuation, quarantine tak issue block.
+7. Recycling batch recovery % = recovered / input weight, certificate attach hue bina batch close nahi, circularity KPIs auto.
+8. DG shipment: classification se packaging/labelling rules, carrier DG-approved aur trained shipper ho tabhi dispatch; transboundary ho to consent status "granted" mandatory; manifest copies ka follow-up (Screen 15 tab 7).
+9. Regulatory report data modules se auto-pull, validation rules, maker-checker approval, submission reference aur acknowledgement store; deadline par T-30/T-7/T-1 alerts.
+10. Har state change `asset_status_history` mein.
+11. `audit_log` har action pe.
+
+---
+
+## SCREEN 14: Site Abandonment (10.4.10) — 4 tabs
+
+### FRONTEND
+
+**Tab 1. Demolish and Secure** (10.4.10.1)
+- Demolition plan and permits, hazmat abatement (asbestos), method statement, utility disconnects, structural demolition
+- C&D waste diversion plan, site security (fencing, guards, hazards), neighbour notices, vibration/dust/noise monitoring, completion certification
+
+**Tab 2. Restore Site** (10.4.10.2)
+- Restoration plan to agreed end-state, environmental assessments (Phase I/II ESA, soil/groundwater sampling), remediation actions
+- Cleanup targets (regulatory limits from config), backfill/grading/re-vegetation, waste disposal tracking, validation sampling, regulator approval, restoration cost vs ARO, before/after GIS photos
+
+**Tab 3. Monitor Site for Regulatory Duration** (10.4.10.3)
+- Post-closure monitoring plan: monitoring points (groundwater wells, soil gas, landfill gas, air, settlement), frequency by permit
+- Lab data import, exceedance alerts, trends, regulator reports, duration clock with extension triggers, financial assurance (bond/trust), cap/fence maintenance
+
+**Tab 4. Prepare Handover to New Operator / Landowner** (10.4.10.4)
+- Handover package (as-left condition, environmental reports, closure certificates, records, restrictions/institutional controls), secure data room
+- Transfer agreement, indemnities, permit/obligation transfer, title/lease surrender, final inspection, sign-offs, residual-liability register, financial-assurance transfer, ARO de-recognition
+
+### BACKEND: Tables
+```
+demolition_projects (id, project_id, site_id, building_id, method, permit_id, start_date, end_date, status)
+demolition_tasks (id, demolition_id, task, owner_id, status, wo_id) / abatement_records (id, demolition_id, hazard_type, quantity, contractor_id, clearance_cert_id)
+utility_disconnects (id, site_id, utility, confirmed_on, ref_no)
+cd_waste_plans (id, demolition_id, targets_json, actual_json, diversion_pct)
+restoration_plans (id, site_id, end_state[greenfield/brownfield/industrial/other], standards_json, est_cost, aro_obligation_id, status, approval_request_id)
+esa_reports (id, site_id, phase[I/II/III], consultant_id, findings_json, report_doc_id, date)
+remediation_actions (id, restoration_id, action_type, contractor_id, area, volume, start_date, end_date, status)
+cleanup_targets (id, country_id, medium[soil/groundwater/air], parameter, limit_value, uom, land_use)
+sampling_events (id, site_id, point_id, medium, collected_on, collected_by) / lab_results (id, sampling_id, parameter, value, uom, detection_limit, lab_ref, pass)
+monitoring_plans (id, site_id, regulation_ref, start_date, required_end_date, extension_rule_json, status)
+monitoring_points (id, plan_id, point_type, geo_point, parameters_json, frequency) / monitoring_results (id, point_id, parameter, value, read_at, source[lab/sensor], limit_value)
+exceedances (id, result_id, severity, notified_on, corrective_action_id, status)
+financial_assurance (id, site_id, type[bond/trust/lc/insurance], amount, currency, provider, expiry, regulator_ref)
+stewardship_records (id, site_id, activity, performed_on, performed_by, next_due)
+handover_packages (id, site_id, recipient_type[operator/landowner/regulator], status, created_on) / handover_items (id, package_id, item_type, document_id, status)
+transfer_agreements (id, package_id, terms_json, indemnities_json, signed_on, document_id)
+residual_liabilities (id, site_id, description, owner_party, amount, status)
+institutional_controls (id, site_id, control_type[deed_restriction/land_use/access], description, recorded_on, registry_ref)
+closure_certificates (id, site_id, cert_type, authority, issued_on, document_id)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/abandon/demolition       GET/POST .../demolition/:id/tasks    GET/POST .../demolition/:id/abatement    POST .../demolition/:id/complete
+GET/POST/PUT /api/eam/abandon/restoration      GET/POST .../restoration/:id/remediation    GET/POST .../esa-reports
+POST /api/eam/abandon/sampling/import-lab       GET .../sampling/compare-targets
+GET/POST/PUT /api/eam/abandon/monitoring/plans  GET/POST .../monitoring/points    POST .../monitoring/results/import    GET .../monitoring/exceedances    GET .../monitoring/regulator-report
+GET/POST/PUT /api/eam/abandon/financial-assurance
+GET/POST/PUT /api/eam/abandon/handover          POST .../handover/:id/transfer    GET/POST .../residual-liabilities
+```
+### Core Logic
+1. Demolition start se pehle hazard survey, abatement clearance, utility disconnect confirmation aur permit mandatory.
+2. C&D waste diversion % = diverted / total, target se compare, waste disposal Screen 15 manifests se link.
+3. Restoration complete tabhi jab validation sampling saare parameters cleanup-target (land-use wise) ke andar ho aur regulator approval mile.
+4. Monitoring duration clock regulation se; exceedance par extension trigger aur regulator notification (config), monitoring end tabhi jab continuous compliance period complete.
+5. Financial assurance expiry par T-90 alert, release tabhi jab regulator approve kare.
+6. Restoration actual cost vs ARO estimate variance Screen 12 settlement ko.
+7. Handover sign-off ke baad asset/site status `abandoned/closed`, ARO de-recognition ya transfer, records long-term retention (config years).
+8. Residual liabilities ka owner aur amount clearly tracked, indemnity doc linked.
+9. `audit_log` har action pe.
+
+---
+
+## SCREEN 15: Waste and Hazardous Goods Management (10.4.11) — 8 tabs
+
+### FRONTEND
+
+**Tab 1. Maintain Material Safety Data Sheets** (10.4.11.1)
+- Chemical inventory with locations/quantities, SDS library (16-section GHS), versioning, supplier updates, language variants, QR access at point of use (offline)
+- New-chemical approval request and review, storage-compatibility matrix, GHS label generation, SDS review expiry, reportable-quantity thresholds (config)
+
+**Tab 2. Regulatory Awareness and Communication** (10.4.11.2)
+- Regulation register (law, authority, jurisdiction, requirement, applicability per site), change monitoring and impact assessment
+- Obligation → task mapping, training/communication campaigns with acknowledgement, multi-country mapping, gap assessment
+
+**Tab 3. Hazardous Material Handling and Disposal** (10.4.11.3)
+- SOPs, storage/accumulation areas with time limits, container tracking (label, date, volume, location), waste profiles and codes
+- Approved TSDF/vendors, pickup requests, weekly area inspections, employee training certifications, spill kits/response, secondary containment
+
+**Tab 4. Manage Compliance Audits** (10.4.11.4)
+- Audit programme (internal/external/regulatory, ISO 14001/45001), regulation-based checklists, scheduling, mobile audit app
+- Findings (severity), CAPA, evidence, scoring/trends, management review, notice-of-violation and penalty tracking, TSDF/supplier audits
+
+**Tab 5. Recognize Need to Disposition Hazardous Materials / Waste** (10.4.11.5)
+- Triggers: expired chemicals, obsolete stock, off-spec, spills, equipment decommissioning, lab/process waste; user waste-request by QR
+- Waste determination decision tree (listed/characteristic), generator-status calculation by monthly quantity (config), alerts
+
+**Tab 6. Determine Disposition and Associated Processing** (10.4.11.6)
+- Hierarchy (reduce, reuse, recycle, recover, treat, incinerate, landfill), method by waste code, facility-capability matching
+- Land-disposal restrictions, pretreatment, cost comparison, approvals, lab analysis ordering, internal reuse marketplace (chemical swap)
+
+**Tab 7. Manage Disposition, Disposal, Reprocessing Activities** (10.4.11.7)
+- Pickup scheduling, container/lot tracking, consolidation, weigh tickets, manifests and transport, receiving-facility confirmation
+- Treatment/recovery records, certificates of destruction/disposal, cradle-to-grave chain of custody, missing-manifest exception report, cost allocation, vendor invoice reconciliation
+
+**Tab 8. Manage Documentation and Reporting** (10.4.11.8)
+- Record repository (manifests, notices, profiles, certificates, training, inspection logs, audit reports), retention rules (config years)
+- Regulatory reports (annual/biennial/quarterly, chemical inventory), ESG metrics (generated, diverted %, hazardous %, intensity), audit-pack generator, e-sign, public disclosure
+
+### BACKEND: Tables
+```
+chemicals (id, name, cas_no, hazard_classes_json, status) / chemical_products (id, chemical_id, manufacturer, product_code, sds_current_id)
+sds_documents (id, product_id, version, language, issue_date, review_due, file_url, status) / sds_sections (id, sds_id, section_no, content)
+chemical_locations (id, product_id, site_id, space_id, container_type, qty, uom, max_allowed, last_counted)
+chemical_approvals (id, requested_by, product_id, justification, reviewers_json, status, approval_request_id)
+storage_compat_rules (id, hazard_class_a, hazard_class_b, allowed, notes)
+regulations (id, country_id, authority, name, category, citation, effective_from, status) / regulation_requirements (id, regulation_id, requirement, applicability_json, frequency)
+regulation_changes (id, regulation_id, change_summary, effective_date, impact_level, assessed_by, status)
+compliance_obligations (id, requirement_id, site_id, owner_id, status, next_due) / obligation_tasks (id, obligation_id, task, due_date, status)
+waste_streams (id, name, waste_code, hazard_class, process_source, status) / waste_codes (id, country_id, code_system[rcra/ewc/custom], code, description, hazardous)
+waste_profiles (id, stream_id, composition_json, physical_state, approved_facility_ids_json, version, status)
+accumulation_areas (id, site_id, name, type[satellite/central], max_days, max_volume, status)
+waste_containers (id, container_no, stream_id, area_id, start_date, volume, status, label_printed, closed_on)
+waste_inspections (id, area_id, inspector_id, date, checklist_result_json, findings, capa_id)
+spill_events (id, site_id, material, quantity, cause, response_json, reported_to_authority, status)
+waste_generation_requests (id, requested_by, source_type[expired/obsolete/spill/lab/process/decommission], product_id, qty, status)
+waste_determinations (id, request_id, hazardous, basis_json, determined_by, date)
+generator_status_calcs (id, site_id, month, qty_hazardous, status_class, thresholds_ref)
+disposition_options (id, waste_code_id, method, hierarchy_rank, restrictions_json) / disposition_decisions (id, container_or_lot_id, method, facility_id, cost, approved_by, approval_request_id)
+tsdf_facilities (id, vendor_id, permits_json, accepted_codes_json, audit_status, status) / facility_approvals (id, facility_id, profile_id, approved_on, expires_on)
+waste_pickups (id, site_id, facility_id, carrier_id, scheduled_at, status) / waste_manifests (id, pickup_id, manifest_no, generator_sig, transporter_sig, facility_sig, status, system_ref)
+manifest_copies (id, manifest_id, copy_type, received_on, overdue_flag) / weigh_tickets (id, pickup_id, gross, tare, net, ticket_no)
+disposal_certificates (id, manifest_id, certificate_type, issued_on, document_id) / treatment_records (id, manifest_id, method, treated_on, result)
+audit_programs (id, name, standard, year, scope_json) / audits (id, program_id, site_id, auditor_id, date, score, status) / audit_findings (id, audit_id, requirement_ref, severity, evidence, capa_id, status)
+violations (id, site_id, authority, notice_ref, description, issued_on, penalty_id, status)
+ehs_training_records (id, employee_id, training_type, completed_on, expires_on, cert_doc_id)
+waste_reports (id, authority, report_type, period, data_json, status, submitted_on)
+esg_waste_metrics (id, period, site_id, total_generated, hazardous, diverted, intensity_per_revenue_or_output)
+retention_rules (id, record_type, country_id, retention_years, legal_basis)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/ehs/chemicals          GET/POST .../chemicals/:id/sds    GET .../sds/expiring    POST .../chemicals/approval-request    GET .../chemicals/compat-check    POST .../sds/labels/generate
+GET/POST/PUT /api/eam/ehs/regulations        GET/POST .../regulations/:id/changes    GET/POST/PUT .../ehs/obligations    POST .../obligations/:id/tasks
+GET/POST/PUT /api/eam/ehs/waste-streams      GET/POST/PUT .../ehs/waste-profiles    GET/POST/PUT .../ehs/accumulation-areas    GET/POST .../ehs/containers    GET/POST .../ehs/inspections    POST .../ehs/spills
+GET/POST/PUT /api/eam/ehs/audits             GET/POST .../audits/:id/findings    GET/POST/PUT .../ehs/violations
+POST /api/eam/ehs/waste-requests             POST .../waste-requests/:id/determine    GET .../ehs/generator-status
+GET/POST /api/eam/ehs/disposition            POST .../disposition/:id/approve    GET/POST/PUT .../ehs/tsdf
+GET/POST/PUT /api/eam/ehs/pickups            POST .../pickups/:id/manifest    PUT .../manifests/:id/sign    GET .../ehs/manifests/overdue    POST .../ehs/certificates
+GET /api/eam/ehs/records                     POST .../ehs/reports/generate    GET .../ehs/esg-metrics    POST .../ehs/audit-pack
+```
+### Core Logic
+1. SDS review expiry (config 3-5 years) aur supplier update par nayi version, purani archived, QR scan se latest SDS offline bhi.
+2. New chemical approve hue bina inventory location mein add nahi, storage-compat matrix incompatible co-location par block.
+3. Regulation change impact level high ho to affected obligations aur owners ko task, acknowledgement tak open.
+4. Container accumulation days > max_days par alert aur escalation, pickup auto-suggest.
+5. Waste determination decision tree (listed vs characteristic) output se waste code aur hazardous flag; generator status monthly quantity se (country thresholds config), status change par compliance obligations badalte hain.
+6. Disposition hierarchy: reuse/recycle pehle, disposal sirf jab upar wale options feasible na ho; facility accepted codes aur approval valid ho tabhi route.
+7. Manifest: generator, transporter, facility signatures; facility copy due date par na aaye to exception report aur follow-up (cradle-to-grave closure).
+8. Disposal certificate aur treatment record attach hue bina lot close nahi.
+9. Audit finding CAPA Engine mein, severity-wise due dates, overdue par management escalation; violation par penalty aur root-cause.
+10. Retention rules se records tab tak delete nahi (legal hold support).
+11. Cost allocation container/lot se generator cost centre ko, vendor invoice reconciliation weigh tickets se.
+12. `audit_log` har action pe.
+
+---
+
+# PART 5: CROSS-CUTTING
+
+## SCREEN 16: Asset Master, Governance and Control Tower — 5 tabs (all Extra)
+
+### FRONTEND
+
+**Tab 1. Asset Registry and Hierarchy (E)**
+- Asset master, classes and attribute templates, multiple hierarchies (functional location, system, financial), BOM, serialization, barcode/QR/RFID tagging
+- Meters, warranties, custodians, bulk import/export, duplicate detection, data-quality score, lifecycle status machine, lineage, as-of-date view
+- Physical verification (cycle counts) and reconciliation to Fixed Assets/GL
+
+**Tab 2. GIS, BIM and Digital Twin (E)**
+- Map layers (sites, buildings, linear assets), floor-plan viewer, BIM (IFC) viewer, asset-on-map, 3D twin with live IoT overlay
+- Spatial queries, linear referencing (pipelines/roads), geofence alerts, drone imagery overlay
+
+**Tab 3. Asset Management System Governance, ISO 55001 (E)**
+- Strategic Asset Management Plan (SAMP), AM policy, objectives, stakeholders, context, risk/opportunity register, AM plans per asset group
+- Roles/competence, internal audits, management review, nonconformity/CAPA, maturity assessment, certification evidence pack
+
+**Tab 4. Enterprise Analytics and Control Tower (E)**
+- Executive dashboards (portfolio, capex, availability, maintenance cost, risk, ESG), TCO per asset, cost per sq ft, occupancy
+- Report builder, scheduled reports, natural-language query/AI copilot, alert-rule engine, BI/warehouse export, benchmarking, drill-through, cross-entity roll-up
+
+**Tab 5. Integrations, IoT and Mobile (E)**
+- Connector catalogue (ERP/GL/Fixed Assets/Procurement/HR/P6/MS Project/BIM/GIS/SCADA/BMS/PACS/IoT/e-sign/government portals), API keys, webhooks, mapping templates
+- IoT device registry and ingestion (MQTT/OPC-UA), edge rules → events, mobile app config (offline sync, form builder, barcode/QR/NFC scan), sync-conflict rules, error queue and retry, data-migration tools
+
+### BACKEND: Tables (assets, hierarchies, meters, status history already in Common Foundation)
+```
+asset_boms (id, asset_id, component_asset_id/item_id, qty, position)
+asset_warranties (id, asset_id, vendor_id, start_date, end_date, terms_json, claim_rules_json)
+asset_custodians (id, asset_id, employee_id, from_date, to_date)
+asset_data_quality (id, asset_id, completeness_pct, issues_json, scored_on)
+physical_verifications (id, site_id, scope_json, planned_on, status) / verification_lines (id, verification_id, asset_id, found, location_found, condition, variance_type)
+map_layers (id, name, layer_type, source, style_json, visible_roles_json)
+bim_models (id, site_id/building_id, ifc_file_url, version, uploaded_on) / digital_twin_links (id, asset_id, model_element_guid, iot_device_id)
+geofences (id, name, polygon, rule_json)
+ams_policies (id, version, text, approved_by, effective_from) / samp_versions (id, version, content_json, status, approved_on)
+am_objectives (id, samp_id, objective, kpi_id, target, owner_id, status)
+am_stakeholders (id, name, needs_json, influence)
+ams_risks_opportunities (id, type, description, score, action, owner_id, status)
+ams_audits (id, scope, auditor_id, date, findings_json, status) / ams_reviews (id, held_on, attendees_json, decisions_json, actions_json)
+am_maturity_assessments (id, framework, date, scores_json, gaps_json)
+dashboards (id, name, owner_id, layout_json, visibility) / dashboard_widgets (id, dashboard_id, widget_type, query_json, position)
+report_definitions (id, name, query_json, format, owner_id) / scheduled_reports (id, report_id, cron, recipients_json, last_run)
+alert_rules (id, name, condition_json, severity, channels_json, status)
+integrations (id, system_name, type, direction, auth_json, status) / integration_mappings (id, integration_id, entity, field_map_json)
+webhooks (id, event_type, target_url, secret_ref, status) / integration_errors (id, integration_id, payload_json, error, retry_count, status)
+iot_gateways (id, site_id, protocol, status) / iot_devices (id, gateway_id, asset_id, device_type, sampling_rate, status)
+iot_readings (device_id, ts, metric, value)   -- time-series store
+edge_rules (id, device_id/asset_class_id, condition_json, action_json)
+mobile_forms (id, name, schema_json, version, applies_to) / sync_logs (id, device_id, user_id, synced_at, conflicts_json)
+import_jobs (id, entity, file_url, mapping_json, status, rows_ok, rows_failed, created_by)
+```
+### BACKEND: APIs
+```
+GET/POST/PUT /api/eam/assets            GET .../assets/:id/hierarchy|bom|history|lineage    POST .../assets/bulk    POST .../assets/merge    GET .../assets?as_of=YYYY-MM-DD
+GET/POST/PUT /api/eam/assets/classes    GET/POST .../assets/:id/meters    POST .../meters/:id/readings
+GET/POST/PUT /api/eam/verification      POST .../verification/:id/scan    GET .../verification/:id/variance    POST .../verification/:id/reconcile
+GET /api/eam/gis/layers    GET /api/eam/gis/assets-in?polygon=...    GET/POST /api/eam/bim/models    GET .../twin/:assetId
+GET/POST/PUT /api/eam/ams/policy    GET/POST/PUT .../ams/samp    GET/POST/PUT .../ams/objectives    GET/POST .../ams/audits    GET/POST .../ams/reviews    GET .../ams/maturity    GET .../ams/evidence-pack
+GET/POST/PUT /api/eam/analytics/dashboards    GET/POST .../analytics/reports    POST .../analytics/query    GET/POST/PUT .../analytics/alert-rules
+GET/POST/PUT /api/eam/integrations    GET/POST .../integrations/:id/mappings    GET .../integrations/errors    POST .../integrations/errors/:id/retry
+POST /api/eam/iot/ingest    GET/POST/PUT .../iot/devices    GET/POST/PUT .../iot/edge-rules    GET/POST/PUT .../mobile/forms    POST .../mobile/sync    POST .../import/jobs
+```
+### Core Logic
+1. Asset status machine: planned → under_construction → commissioning → active ↔ standby/under_maintenance → decommissioned → disposed/abandoned; invalid transitions block, har transition `asset_status_history` mein reason code ke saath.
+2. Asset tag unique per entity, duplicate detection (serial+model+location fuzzy), merge par saari history re-point.
+3. Fixed Asset link: registry aur Ledger ka reconcile (count, cost, location), physical verification variance par adjustment WO/journal approval ke saath.
+4. Hierarchy effective-dated, "as-of date" par purana structure.
+5. Data-quality score required attributes (class schema) se, low score wale assets report mein flag.
+6. IoT reading → edge rule → event → signal (Screen 11 tab 4) ya anomaly (Screen 9 tab 2), raw time-series alag store mein retention policy ke saath.
+7. ISO 55001 evidence pack SAMP, objectives, AM plans, risks, audits, review minutes ko ek jagah jodta hai; internal audit finding CAPA Engine mein.
+8. Alert rules cross-module metrics (backlog, covenant, permit expiry, SDS expiry, ARO review) par chalte hain, channels config.
+9. Integration events outbox pattern se (retry, idempotent), failed payload error queue mein.
+10. Mobile sync: server-wins/last-write-wins per entity (config), conflict log, attachments chunked upload.
+11. Analytics roll-up cross-entity base currency mein, drill-through record tak.
+12. `audit_log` har action pe.
+
+---
+
+# FINAL COUNT
+
+| Screen | APQC | Tabs |
+|---|---|---|
+| 1 Property Strategy | 10.1.1 | 3 |
+| 2 Facility Planning (+Lease Admin) | 10.1.2 | 5 + 1 (E) |
+| 3 Workspace Provision (+Space Mgmt) | 10.1.3 | 2 + 1 (E) |
+| 4 Facilities Operations | 10.1.4 | 3 |
+| 5 Capital Program | 10.2.1 | 3 |
+| 6 Construction Design and Planning | 10.2.2 | 5 |
+| 7 Schedule and Perform Construction | 10.2.3 | 5 |
+| 8 Construction Management (+Doc Control) | 10.2.4 | 5 + 1 (E) |
+| 9 Maintenance Planning (+Criticality/Risk) | 10.3.1 | 7 + 1 (E) |
+| 10 Maintenance Management | 10.3.2 | 7 |
+| 11 Perform Maintenance (+RCA) | 10.3.3 | 5 + 1 (E) |
+| 12 Exit Strategy (+ARO) | 10.4.1 | 2 + 1 (E) |
+| 13 End-of-Life Operations | 10.4.2-10.4.9 | 8 |
+| 14 Abandonment | 10.4.10 | 4 |
+| 15 Waste and Hazardous Goods | 10.4.11 | 8 |
+| 16 Asset Master, Governance, Control Tower | cross-cutting | 5 (E) |
+| **Total** | **72 sub-processes** | **83 tabs (72 + 11 extras)** |
+
+# RESEARCH BASIS
+
+- EAM poore lifecycle (capex se decommissioning tak) ko cover karta hai jabki CMMS work-order-centric aur narrow hota hai, isiliye ye guide CMMS nahi, poora EAM bana hai.
+- Maximo jaise platforms mein Health, Predict, Visual Inspection aur Mobile alag modules hain, isi wajah se Screen 9 (health/predict), Screen 11 (signals/mobile) aur Screen 16 (IoT/mobile) alag diye.
+- ISO 55001 documented Strategic Asset Management Plan mandatory karta hai, aur second edition July 2024 mein publish hua; isse Screen 16 tab 3 aur `am_plans` aaye.
+- Capital tools stage-gate, EAC forecasting aur SAP/P6 se earned value (CPI/SPI) use karte hain, Screen 5 isi pe based hai.
+- IWMS mein lease accounting (ASC 842/IFRS) space aur maintenance ke saath integrated hota hai, isse Screen 2 tab 6 aur Screen 3 tab 3 bane.
+- RCM findings ko CMMS mein PM trigger, condition alert aur spare reorder point banna chahiye warna analysis bekar rehta hai; Screen 9 logic point 1 yahi karta hai.
+- Failure code capture ISO 14224-aligned library se closure par enforce karna reliability data banata hai, Screen 10 tab 4 aur Screen 11 tab 6.
+- ASC 410-20 ke under ARO ka liability fair value par recognize hota hai, Screen 12 tab 3 isi pe hai.
+
+Regulation ke specific numbers (thresholds, retention years, waste codes, UN classes) maine config tables mein rakhe hain, har country ke legal/EHS team se verify karke bharna.
+
+Sources:
+- [10 Best EAM Software in 2026](https://facilio.com/blog/best-eam-software/)
+- [Leading EAM Platforms in 2026](https://www.slash.com/blog/enterprise-asset-management-software)
+- [Best EAM Software Providers 2026](https://opsima.com/blog/comparison/best-eam-software-providers/)
+- [ISO 55001: Requirements](https://tractian.com/en/glossary/iso-55001)
+- [ISO 55001:2024](https://genorma.com/en/standards/iso-55001)
+- [Capital Project and Portfolio Management](https://www.prometheusgroup.com/solutions/capital-project-and-portfolio-management)
+- [IWMS Software](https://www.accruent.com/solutions/iwms-software)
+- [Manufacturing RCM Implementation Guide 2026](https://oxmaint.com/blog/post/manufacturing-reliability-centered-maintenance-rcm-guide)
+- [CMMS for Reliability Engineers](https://www.fabrico.io/sr/blog/cmms-software-for-reliability-engineers-reactive-to-proactive/)
+- [Asset Retirement Obligations (ASC 410-20)](https://www.superfastcpa.com/how-to-calculate-assets-and-liabilities-from-asset-retirement-obligations/)
+
+Agla step: bol de to isi format mein APQC ki agli category (jaise 9.0 Finance ya 11.0 Risk/Compliance) ka guide bana dunga.
